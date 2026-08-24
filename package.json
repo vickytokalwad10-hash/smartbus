@@ -1,0 +1,17 @@
+{
+  "name": "smartbus",
+  "version": "1.0.0",
+  "description": "SmartBus AI Bus Pass & Demand Prediction System",
+  "scripts": {
+    "dev:server": "cd server && node server.js",
+    "dev:client": "cd client && npm run dev",
+    "seed": "cd server && node seed/seed.js",
+    "install:all": "cd server && npm install && cd ../client && npm install",
+    "build:client": "cd client && npm run build && npx cap sync",
+    "build:apk": "cd client && npm run build && npx cap sync && cd android && gradlew.bat assembleDebug && cd ../.. && node copy_apk.js",
+    "copy:apk": "node copy_apk.js",
+    "start": "npm run dev:server"
+  },
+  "author": "SmartBus AI Team",
+  "license": "MIT"
+}

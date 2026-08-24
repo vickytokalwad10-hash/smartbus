@@ -1,0 +1,111 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background-color: #f9f9ff;
+    color: #151c27;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    font-size: inherit;
+    vertical-align: middle;
+    user-select: none;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #c3c5d7; border-radius: 10px; }
+  ::-webkit-scrollbar-thumb:hover { background: #737686; }
+}
+
+@layer components {
+  /* Ping animation for live bus markers */
+  .ping-dot {
+    @apply relative inline-flex;
+  }
+  .ping-dot::after {
+    content: '';
+    @apply absolute inset-0 rounded-full animate-ping-slow opacity-75;
+    background: inherit;
+  }
+
+  /* Glass card effect */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+  }
+
+  /* Status pulse for active passes */
+  .status-pulse {
+    animation: statusPulse 2s infinite;
+  }
+  @keyframes statusPulse {
+    0% { box-shadow: 0 0 0 0px rgba(0, 108, 73, 0.4); }
+    100% { box-shadow: 0 0 0 10px rgba(0, 108, 73, 0); }
+  }
+
+  /* Sidebar nav item */
+  .nav-item {
+    @apply flex items-center gap-4 px-4 py-3 text-on-surface-variant rounded-lg font-semibold text-sm transition-all cursor-pointer;
+  }
+  .nav-item:hover { @apply bg-surface-container; }
+  .nav-item.active {
+    @apply text-primary bg-surface-container-high border-r-4 border-primary;
+  }
+
+  /* Primary button */
+  .btn-primary {
+    @apply bg-primary text-on-primary px-6 py-3 rounded-lg font-semibold text-sm hover:bg-primary-container transition-all active:scale-95 shadow-card;
+  }
+
+  /* Secondary/ghost button */
+  .btn-secondary {
+    @apply border-2 border-primary text-primary px-6 py-3 rounded-lg font-semibold text-sm hover:bg-primary-fixed transition-all active:scale-95;
+  }
+
+  /* Card base */
+  .card {
+    @apply bg-surface-container-lowest rounded-xl shadow-card border border-outline-variant/30;
+  }
+
+  /* Status chip */
+  .chip-active   { @apply inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-secondary/10 text-secondary; }
+  .chip-pending  { @apply inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-tertiary/10 text-tertiary; }
+  .chip-expired  { @apply inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-error/10 text-error; }
+  .chip-rejected { @apply inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-error/10 text-error; }
+
+  /* Input field */
+  .input-field {
+    @apply w-full border border-outline-variant rounded-lg px-4 py-3 text-sm bg-surface-container-lowest text-on-surface
+      placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all;
+  }
+
+  /* Table */
+  .data-table th {
+    @apply px-6 py-3 text-left text-xs font-bold text-on-surface-variant uppercase tracking-wider bg-surface-container-low;
+  }
+  .data-table td {
+    @apply px-6 py-4 text-sm text-on-surface border-b border-outline-variant/30;
+  }
+  .data-table tr:hover td { @apply bg-surface-container-low; }
+
+  /* Metric card */
+  .metric-card {
+    @apply bg-surface-container-lowest p-4 rounded-xl shadow-card hover:shadow-overlay transition-all hover:-translate-y-0.5;
+  }
+
+  /* Bento grid */
+  .bento-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 24px;
+  }
+}

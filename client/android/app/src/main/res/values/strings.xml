@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">JD College Bus Pass</string>
+    <string name="title_activity_main">JD College Bus Pass</string>
+    <string name="package_name">com.jdcollege.smartbus</string>
+    <string name="custom_url_scheme">com.jdcollege.smartbus</string>
+</resources>
