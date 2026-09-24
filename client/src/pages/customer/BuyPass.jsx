@@ -21,6 +21,10 @@ const BuyPass = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [createdPass, setCreatedPass] = useState(null);
+  
+  // Phase 8: Pass Rollover
+  const [rolloverDays, setRolloverDays] = useState(0);
+  const [linkedPreviousPassId, setLinkedPreviousPassId] = useState(null);
 
   useEffect(() => {
     supabase.from('routes').select('*').then(({ data, error }) => {
@@ -45,12 +49,55 @@ const BuyPass = () => {
   const currentPlan = plans.find(p => p.id === duration) || plans[2];
   const activeRouteObj = routes.find(r => r.id === selectedRoute);
 
-  const handleNextStep = () => {
+  const handleNextStep = async () => {
     if (step === 2 && (!selectedRoute || !boardingPoint.trim() || !destinationStop.trim())) {
       setError('Please fill in boarding point and destination stop.');
       return;
     }
     setError('');
+    
+    if (step === 2 && user) {
+      // Phase 8: Calculate Pass Rollover before payment
+      try {
+        setLoading(true);
+        const { data, error } = await supabase
+          .from('passes')
+          .select('id, valid_until, rollover_days_out, rollover_claimed')
+          .eq('user_id', user.id)
+          .eq('duration', duration)
+          .order('valid_until', { ascending: false })
+          .limit(1)
+          .single();
+          
+        if (data) {
+          const endDate = new Date(data.valid_until);
+          const now = new Date();
+          let rDays = 0;
+          
+          if (endDate > now) {
+            rDays = Math.ceil((endDate - now) / (1000 * 60 * 60 * 24));
+          } else if (data.rollover_days_out > 0 && !data.rollover_claimed) {
+            rDays = data.rollover_days_out;
+          }
+          
+          if (duration === 'weekly') rDays = Math.min(rDays, 7);
+          else if (duration === 'monthly') rDays = Math.min(rDays, 15);
+          else rDays = 0; // Daily/Annual don't roll over in this demo
+          
+          if (rDays > 0) {
+            setRolloverDays(rDays);
+            setLinkedPreviousPassId(data.id);
+          } else {
+            setRolloverDays(0);
+            setLinkedPreviousPassId(null);
+          }
+        }
+      } catch (err) {
+        // Ignore if no previous pass
+      } finally {
+        setLoading(false);
+      }
+    }
     setStep(s => s + 1);
   };
 
@@ -63,7 +110,8 @@ const BuyPass = () => {
 
       const passId = 'SB-PASS-' + Math.floor(Math.random() * 1000000);
       const validUntil = new Date();
-      validUntil.setDate(validUntil.getDate() + currentPlan.days);
+      // Add regular days + rollover days
+      validUntil.setDate(validUntil.getDate() + currentPlan.days + rolloverDays);
       
       const payload = {
         pass_id: passId,
@@ -76,11 +124,18 @@ const BuyPass = () => {
         status: 'active',
         valid_until: validUntil.toISOString(),
         amount: currentPlan.price,
-        qr_data: `PASS:${passId}:USR:${user.id}:RT:${selectedRoute}`
+        qr_data: `PASS:${passId}:USR:${user.id}:RT:${selectedRoute}`,
+        rollover_days_in: rolloverDays,
+        linked_previous_pass_id: linkedPreviousPassId
       };
       
       const { data: passData, error: passError } = await supabase.from('passes').insert([payload]).select('*, route:routes(*)').single();
       if (passError) throw passError;
+      
+      // If we claimed rollover days, mark the old pass as claimed
+      if (linkedPreviousPassId && rolloverDays > 0) {
+        await supabase.from('passes').update({ rollover_claimed: true }).eq('id', linkedPreviousPassId);
+      }
       
       // Also record payment
       await supabase.from('payments').insert([{
@@ -228,6 +283,15 @@ const BuyPass = () => {
                   <span className="text-on-surface-variant">Selected Route:</span>
                   <span className="font-bold">Route {activeRouteObj?.route_number || 'All'}</span>
                 </div>
+                {rolloverDays > 0 && (
+                  <div className="flex justify-between text-secondary">
+                    <span className="font-bold flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[14px]">redeem</span> 
+                      Rollover Days Applied
+                    </span>
+                    <span className="font-bold">+{rolloverDays} days</span>
+                  </div>
+                )}
                 <div className="flex justify-between pt-2 border-t border-outline-variant/30 text-sm font-black">
                   <span>Total Amount:</span>
                   <span className="text-primary">₹{currentPlan.price}</span>

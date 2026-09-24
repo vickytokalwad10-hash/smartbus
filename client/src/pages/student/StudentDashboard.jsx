@@ -98,6 +98,13 @@ const StudentDashboard = () => {
                   </div>
                 </div>
 
+                {activePass.rollover_days_in > 0 && (
+                  <div className="mt-3 bg-white/20 p-2 rounded-lg text-xs font-bold flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[14px]">redeem</span>
+                    Rollover Balance: {activePass.rollover_days_in} days carried forward from your previous pass!
+                  </div>
+                )}
+
                 <div className="pt-2 flex justify-between items-center">
                   <button onClick={() => navigate('/student/pass')} className="btn-secondary bg-white text-primary border-white hover:bg-surface-container-low text-xs font-bold">
                     View Digital Pass & QR Code

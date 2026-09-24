@@ -37,6 +37,10 @@ export default function StudentRenew() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [errors, setErrors] = useState({});
+  
+  // Phase 8: Pass Rollover
+  const [rolloverDays, setRolloverDays] = useState(0);
+  const [linkedPreviousPassId, setLinkedPreviousPassId] = useState(null);
 
   const currentDuration = DURATION_OPTIONS.find((d) => d.id === selectedDuration);
   const basePrice = currentDuration?.price || 500;
@@ -59,6 +63,51 @@ export default function StudentRenew() {
     };
     fetchRoutes();
   }, []);
+  
+  // Check for rollover when duration changes
+  useEffect(() => {
+    const checkRollover = async () => {
+      if (!user || !selectedDuration) return;
+      try {
+        const { data, error } = await supabase
+          .from('passes')
+          .select('id, valid_until, rollover_days_out, rollover_claimed')
+          .eq('user_id', user.id)
+          .eq('duration', selectedDuration)
+          .order('valid_until', { ascending: false })
+          .limit(1)
+          .single();
+          
+        if (data) {
+          const endDate = new Date(data.valid_until);
+          const now = new Date();
+          let rDays = 0;
+          
+          if (endDate > now) {
+            rDays = Math.ceil((endDate - now) / (1000 * 60 * 60 * 24));
+          } else if (data.rollover_days_out > 0 && !data.rollover_claimed) {
+            rDays = data.rollover_days_out;
+          }
+          
+          if (selectedDuration === 'weekly') rDays = Math.min(rDays, 7);
+          else if (selectedDuration === 'monthly') rDays = Math.min(rDays, 15);
+          else rDays = 0;
+          
+          if (rDays > 0) {
+            setRolloverDays(rDays);
+            setLinkedPreviousPassId(data.id);
+          } else {
+            setRolloverDays(0);
+            setLinkedPreviousPassId(null);
+          }
+        }
+      } catch (err) {
+        setRolloverDays(0);
+        setLinkedPreviousPassId(null);
+      }
+    };
+    checkRollover();
+  }, [user, selectedDuration]);
 
   const validate = () => {
     const errs = {};
@@ -84,7 +133,7 @@ export default function StudentRenew() {
       
       const passId = 'SB-STUDENT-' + Math.floor(Math.random() * 1000000);
       const validUntil = new Date();
-      validUntil.setDate(validUntil.getDate() + (currentDuration?.days || 30));
+      validUntil.setDate(validUntil.getDate() + (currentDuration?.days || 30) + rolloverDays);
 
       const formData = {
         pass_id: passId,
@@ -97,11 +146,17 @@ export default function StudentRenew() {
         status: 'active',
         valid_until: validUntil.toISOString(),
         amount: finalAmount,
-        qr_data: `PASS:${passId}:USR:${user.id}:RT:${selectedRoute}`
+        qr_data: `PASS:${passId}:USR:${user.id}:RT:${selectedRoute}`,
+        rollover_days_in: rolloverDays,
+        linked_previous_pass_id: linkedPreviousPassId
       };
       
       const { error: passError } = await supabase.from('passes').insert([formData]);
       if (passError) throw passError;
+      
+      if (linkedPreviousPassId && rolloverDays > 0) {
+        await supabase.from('passes').update({ rollover_claimed: true }).eq('id', linkedPreviousPassId);
+      }
       
       await supabase.from('payments').insert([{
         user_id: user.id,
@@ -451,6 +506,12 @@ export default function StudentRenew() {
 
                 {/* Summary bullets */}
                 <div className="flex flex-col gap-2 text-body-sm text-on-surface-variant mb-6">
+                  {rolloverDays > 0 && (
+                    <div className="flex items-center gap-2 text-secondary font-bold">
+                      <span className="material-symbols-outlined text-base">redeem</span>
+                      <span>+{rolloverDays} Rollover Days Applied from previous pass!</span>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2">
                     <span className="material-symbols-outlined text-base text-primary">
                       check_circle

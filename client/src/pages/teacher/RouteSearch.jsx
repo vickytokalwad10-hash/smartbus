@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import TeacherNavbar from '../../components/TeacherNavbar';
 import SeatOccupancyBar from '../../components/SeatOccupancyBar';
-import api from '../../utils/api';
+import { supabase } from '../../utils/supabaseClient';
 
 const RouteSearch = () => {
   const navigate = useNavigate();
@@ -21,8 +21,14 @@ const RouteSearch = () => {
   const fetchRoutes = async (q) => {
     setLoading(true);
     try {
-      const endpoint = q ? `/routes/search?query=${encodeURIComponent(q)}` : '/routes';
-      const { data } = await api.get(endpoint);
+      let req = supabase.from('routes').select('*');
+      if (q) {
+        req = req.or(`route_number.ilike.%${q}%,name.ilike.%${q}%`);
+      }
+      const { data, error } = await req;
+      if (error) throw error;
+      
+      // Also fetch stops to search if needed, but ilike covers basics
       setRoutes(data || []);
     } catch (err) {
       console.error('Error fetching routes:', err);
@@ -37,7 +43,7 @@ const RouteSearch = () => {
   };
 
   const filteredRoutes = routes.filter(r => {
-    if (filter === 'electric') return r.routeNumber?.includes('EV') || r.name?.toLowerCase().includes('electric') || r.name?.toLowerCase().includes('eco');
+    if (filter === 'electric') return r.route_number?.includes('EV') || r.name?.toLowerCase().includes('electric') || r.name?.toLowerCase().includes('eco');
     if (filter === 'express') return r.name?.toLowerCase().includes('express') || r.frequency?.includes('10');
     return true;
   });
@@ -101,20 +107,20 @@ const RouteSearch = () => {
         ) : filteredRoutes.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredRoutes.map(route => (
-              <div key={route._id} className="card p-6 border-l-4 border-primary hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
+              <div key={route.id} className="card p-6 border-l-4 border-primary hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
                 <div>
                   <div className="flex justify-between items-start mb-3">
                     <span className="px-3 py-1 bg-primary text-on-primary font-black rounded-lg text-lg">
-                      Route {route.routeNumber}
+                      Route {route.route_number}
                     </span>
                     <span className="text-xs font-bold text-secondary bg-secondary/10 px-3 py-1 rounded-full">
-                      ₹{route.baseFare || 20} Base Fare
+                      ₹{route.base_fare || 20} Base Fare
                     </span>
                   </div>
 
                   <h3 className="font-bold text-lg text-on-surface mb-1 truncate">{route.name}</h3>
                   <p className="text-xs text-on-surface-variant mb-4">
-                    Operating: {route.startTime || '06:00'} - {route.endTime || '22:00'} · Frequency: {route.frequency || 'Every 15 mins'}
+                    Operating: {route.start_time || '06:00'} - {route.end_time || '22:00'} · Frequency: {route.frequency || 'Every 15 mins'}
                   </p>
 
                   {/* Stops list */}
@@ -131,13 +137,13 @@ const RouteSearch = () => {
 
                   <div className="flex gap-2">
                     <button
-                      onClick={() => navigate(`/track?route=${route._id}`)}
+                      onClick={() => navigate(`/track?route=${route.id}`)}
                       className="btn-primary flex-1 py-2 text-xs flex items-center justify-center gap-1"
                     >
                       <span className="material-symbols-outlined text-sm">map</span> Track Live
                     </button>
                     <button
-                      onClick={() => navigate(`/teacher/buy-pass?route=${route._id}`)}
+                      onClick={() => navigate(`/teacher/buy-pass?route=${route.id}`)}
                       className="btn-secondary flex-1 py-2 text-xs flex items-center justify-center gap-1"
                     >
                       <span className="material-symbols-outlined text-sm">confirmation_number</span> Faculty Pass

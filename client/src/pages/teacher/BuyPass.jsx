@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import TeacherNavbar from '../../components/TeacherNavbar';
 import QRCodeCard from '../../components/QRCodeCard';
-import api from '../../utils/api';
+import { supabase } from '../../utils/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 
 const BuyPass = () => {
@@ -21,14 +21,22 @@ const BuyPass = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [createdPass, setCreatedPass] = useState(null);
+  
+  // Phase 8: Pass Rollover
+  const [rolloverDays, setRolloverDays] = useState(0);
+  const [linkedPreviousPassId, setLinkedPreviousPassId] = useState(null);
 
   useEffect(() => {
-    api.get('/routes').then(res => {
-      setRoutes(res.data || []);
-      if (res.data?.length > 0 && !selectedRoute) {
-        setSelectedRoute(res.data[0]._id);
+    supabase.from('routes').select('*').then(({ data, error }) => {
+      if (error) {
+        console.error(error);
+        return;
       }
-    }).catch(console.error);
+      setRoutes(data || []);
+      if (data?.length > 0 && !selectedRoute) {
+        setSelectedRoute(data[0].id);
+      }
+    });
   }, []);
 
   const plans = [
@@ -44,14 +52,49 @@ const BuyPass = () => {
   const discountMultiplier = isTeacher ? 0.7 : user?.role === 'student' ? 0.5 : 1.0;
   const finalPrice = Math.round(currentPlan.basePrice * discountMultiplier);
 
-  const activeRouteObj = routes.find(r => r._id === selectedRoute);
+  const activeRouteObj = routes.find(r => r.id === selectedRoute);
 
-  const handleNextStep = () => {
+  const handleNextStep = async () => {
     if (step === 2 && (!selectedRoute || !boardingPoint.trim() || !destinationStop.trim())) {
       setError('Please fill in boarding point and destination stop.');
       return;
     }
     setError('');
+    
+    if (step === 2 && user) {
+      try {
+        setLoading(true);
+        const { data, error } = await supabase
+          .from('passes')
+          .select('id, valid_until, rollover_days_out, rollover_claimed')
+          .eq('user_id', user.id)
+          .eq('duration', duration)
+          .order('valid_until', { ascending: false })
+          .limit(1)
+          .single();
+          
+        if (data) {
+          const endDate = new Date(data.valid_until);
+          const now = new Date();
+          let rDays = 0;
+          if (endDate > now) rDays = Math.ceil((endDate - now) / (1000 * 60 * 60 * 24));
+          else if (data.rollover_days_out > 0 && !data.rollover_claimed) rDays = data.rollover_days_out;
+          
+          if (duration === 'weekly') rDays = Math.min(rDays, 7);
+          else if (duration === 'monthly') rDays = Math.min(rDays, 15);
+          else rDays = 0;
+          
+          if (rDays > 0) {
+            setRolloverDays(rDays);
+            setLinkedPreviousPassId(data.id);
+          } else {
+            setRolloverDays(0);
+            setLinkedPreviousPassId(null);
+          }
+        }
+      } catch (err) {}
+      finally { setLoading(false); }
+    }
     setStep(s => s + 1);
   };
 
@@ -60,19 +103,47 @@ const BuyPass = () => {
     setLoading(true);
     setError('');
     try {
+      if (!user) throw new Error("Must be logged in");
+      
+      const passId = 'SB-FACULTY-' + Math.floor(Math.random() * 1000000);
+      const validUntil = new Date();
+      validUntil.setDate(validUntil.getDate() + currentPlan.days + rolloverDays);
+      
       const payload = {
-        routeId: selectedRoute,
-        boardingPoint: boardingPoint || 'Sitabuldi Interchange',
-        destinationStop: destinationStop || 'JD College Main Gate',
+        pass_id: passId,
+        user_id: user.id,
+        route_id: selectedRoute,
+        boarding_point: boardingPoint || 'Sitabuldi Interchange',
+        destination_stop: destinationStop || 'JD College Main Gate',
         duration,
-        passType: 'teacher',
-        paymentMethod
+        pass_type: 'teacher',
+        status: 'active',
+        valid_until: validUntil.toISOString(),
+        amount: finalPrice,
+        qr_data: `PASS:${passId}:USR:${user.id}:RT:${selectedRoute}`,
+        rollover_days_in: rolloverDays,
+        linked_previous_pass_id: linkedPreviousPassId
       };
-      const { data } = await api.post('/passes', payload);
-      setCreatedPass(data);
+      
+      const { data: passData, error: passError } = await supabase.from('passes').insert([payload]).select('*, route:routes(*)').single();
+      if (passError) throw passError;
+      
+      if (linkedPreviousPassId && rolloverDays > 0) {
+        await supabase.from('passes').update({ rollover_claimed: true }).eq('id', linkedPreviousPassId);
+      }
+      
+      await supabase.from('payments').insert([{
+        user_id: user.id,
+        amount: finalPrice,
+        method: paymentMethod,
+        status: 'completed',
+        description: `Purchased ${duration} faculty pass`
+      }]);
+
+      setCreatedPass(passData);
       setStep(4);
     } catch (err) {
-      setError(err.response?.data?.message || 'Payment failed. Please try again.');
+      setError(err.message || 'Payment failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -212,8 +283,17 @@ const BuyPass = () => {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-on-surface-variant">Selected Route:</span>
-                  <span className="font-bold">Route {activeRouteObj?.routeNumber || 'All'}</span>
+                  <span className="font-bold">Route {activeRouteObj?.route_number || 'All'}</span>
                 </div>
+                {rolloverDays > 0 && (
+                  <div className="flex justify-between text-secondary">
+                    <span className="font-bold flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[14px]">redeem</span> 
+                      Rollover Days Applied
+                    </span>
+                    <span className="font-bold">+{rolloverDays} days</span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-on-surface-variant">Faculty Concession (30%):</span>
                   <span className="font-bold text-secondary">-₹{currentPlan.basePrice - finalPrice}</span>
