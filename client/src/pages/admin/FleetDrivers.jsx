@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import AdminSidebar from '../../components/AdminSidebar';
 import SeatOccupancyBar from '../../components/SeatOccupancyBar';
-import api from '../../utils/api';
+import { supabase } from '../../utils/supabaseClient';
 
 const FleetDrivers = () => {
   const [tab, setTab] = useState('buses'); // 'buses' | 'drivers'
@@ -22,9 +22,9 @@ const FleetDrivers = () => {
     setLoading(true);
     try {
       const [bRes, dRes, rRes] = await Promise.all([
-        api.get('/buses'),
-        api.get('/users?role=driver'),
-        api.get('/routes')
+        supabase.from('buses').select('*, route:routes(*)'),
+        supabase.from('profiles').select('*').eq('role', 'driver'),
+        supabase.from('routes').select('*')
       ]);
       setBuses(bRes.data || []);
       setDrivers(dRes.data || []);
@@ -39,7 +39,15 @@ const FleetDrivers = () => {
   const handleCreateBus = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/buses', busForm);
+      await supabase.from('buses').insert([{
+        bus_number: busForm.busNumber,
+        registration_plate: busForm.registrationPlate || busForm.busNumber,
+        capacity: busForm.capacity,
+        type: busForm.type,
+        route_id: busForm.route || null,
+        status: 'active',
+        current_occupancy: 0
+      }]);
       setShowBusModal(false);
       fetchData();
     } catch (err) {
@@ -88,13 +96,13 @@ const FleetDrivers = () => {
           {tab === 'buses' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {buses.map(bus => (
-                <div key={bus._id} className="card p-5 space-y-4 border-l-4 border-primary">
+                <div key={bus.id} className="card p-5 space-y-4 border-l-4 border-primary">
                   <div className="flex justify-between items-start">
                     <div>
                       <span className="px-2.5 py-1 bg-surface-container font-black text-xs rounded text-primary">
-                        {bus.busNumber}
+                        {bus.bus_number || bus.busNumber}
                       </span>
-                      <p className="text-xs text-on-surface-variant mt-1">Plate: {bus.registrationPlate || 'N/A'}</p>
+                      <p className="text-xs text-on-surface-variant mt-1">Plate: {bus.registration_plate || bus.registrationPlate || 'N/A'}</p>
                     </div>
 
                     <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
@@ -109,7 +117,7 @@ const FleetDrivers = () => {
                     <p className="text-sm font-bold text-on-surface">{bus.route?.name || 'Unassigned'}</p>
                   </div>
 
-                  <SeatOccupancyBar current={bus.currentOccupancy || 0} capacity={bus.capacity || 50} />
+                  <SeatOccupancyBar current={bus.current_occupancy || bus.currentOccupancy || 0} capacity={bus.capacity || 50} />
 
                   <div className="flex justify-between items-center text-xs pt-2 border-t border-outline-variant/30">
                     <span className="text-on-surface-variant">Status: <strong className="text-secondary capitalize">{bus.status}</strong></span>
@@ -137,9 +145,9 @@ const FleetDrivers = () => {
                   </thead>
                   <tbody>
                     {drivers.map(d => (
-                      <tr key={d._id}>
+                      <tr key={d.id}>
                         <td className="font-bold">{d.name}</td>
-                        <td className="font-mono text-xs text-primary">{d.employeeId || 'DRV-001'}</td>
+                        <td className="font-mono text-xs text-primary">{d.employee_id || d.employeeId || 'DRV-001'}</td>
                         <td>{d.email}</td>
                         <td>{d.phone || '9876543210'}</td>
                         <td>
@@ -208,7 +216,7 @@ const FleetDrivers = () => {
                 >
                   <option value="">Select Route</option>
                   {routes.map(r => (
-                    <option key={r._id} value={r._id}>Route {r.routeNumber} — {r.name}</option>
+                    <option key={r.id} value={r.id}>Route {r.route_number || r.routeNumber} — {r.name}</option>
                   ))}
                 </select>
               </div>

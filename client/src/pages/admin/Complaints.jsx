@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import AdminSidebar from '../../components/AdminSidebar';
-import api from '../../utils/api';
+import { supabase } from '../../utils/supabaseClient';
 
 const Complaints = () => {
   const [complaints, setComplaints] = useState([]);
@@ -14,7 +14,11 @@ const Complaints = () => {
   const fetchComplaints = async () => {
     setLoading(true);
     try {
-      const { data } = await api.get('/complaints');
+      const { data, error } = await supabase
+        .from('complaints')
+        .select('*, user:profiles(*)')
+        .order('created_at', { ascending: false });
+      if (error) console.error(error);
       setComplaints(data || []);
     } catch (err) {
       console.error(err);
@@ -25,7 +29,9 @@ const Complaints = () => {
 
   const handleUpdateStatus = async (id, status) => {
     try {
-      await api.patch(`/complaints/${id}`, { status });
+      const payload = { status };
+      if (status === 'resolved') payload.resolved_at = new Date();
+      await supabase.from('complaints').update(payload).eq('id', id);
       fetchComplaints();
     } catch (err) {
       console.error(err);
@@ -61,7 +67,7 @@ const Complaints = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {filtered.map(c => (
-              <div key={c._id} className="card p-6 space-y-4 border-l-4 border-error flex flex-col justify-between">
+              <div key={c.id} className="card p-6 space-y-4 border-l-4 border-error flex flex-col justify-between">
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
                     <span className="px-2.5 py-0.5 bg-error/10 text-error font-black text-xs uppercase rounded">
@@ -79,13 +85,13 @@ const Complaints = () => {
                   <p className="text-xs text-on-surface-variant">
                     Submitted by: <strong>{c.user?.name || 'User'}</strong> ({c.user?.email})
                   </p>
-                  <p className="text-[11px] text-outline">Date: {new Date(c.createdAt).toLocaleString()}</p>
+                  <p className="text-[11px] text-outline">Date: {new Date(c.created_at).toLocaleString()}</p>
                 </div>
 
                 <div className="pt-3 border-t border-outline-variant/30 flex gap-2 justify-end">
                   {c.status !== 'in-progress' && c.status !== 'resolved' && (
                     <button
-                      onClick={() => handleUpdateStatus(c._id, 'in-progress')}
+                      onClick={() => handleUpdateStatus(c.id, 'in-progress')}
                       className="px-3 py-1.5 bg-tertiary text-white rounded font-bold text-xs hover:bg-tertiary-container"
                     >
                       In-Progress
@@ -93,7 +99,7 @@ const Complaints = () => {
                   )}
                   {c.status !== 'resolved' && (
                     <button
-                      onClick={() => handleUpdateStatus(c._id, 'resolved')}
+                      onClick={() => handleUpdateStatus(c.id, 'resolved')}
                       className="px-3 py-1.5 bg-secondary text-white rounded font-bold text-xs hover:bg-secondary-container"
                     >
                       Mark Resolved ✓

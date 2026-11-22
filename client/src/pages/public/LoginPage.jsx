@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../utils/supabaseClient';
 import api from '../../utils/api';
 
 const ROLES = [
@@ -29,6 +30,14 @@ const LoginPage = () => {
   const [form, setForm] = useState({ name: '', email: '', password: '', collegeName: 'JD College of Engineering & Technology', employeeId: '', studentId: '', phone: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const { user } = useAuth();
+
+  // If user becomes available (from background onAuthStateChange or successful login), redirect them automatically
+  useEffect(() => {
+    if (user && user.role) {
+      navigate(DASHBOARDS[user.role] || '/teacher/dashboard');
+    }
+  }, [user, navigate]);
 
   const handle = e => setForm(f => ({ ...f, [e.target.name]: e.target.value }));
 
@@ -37,11 +46,52 @@ const LoginPage = () => {
     setError(''); setLoading(true);
     try {
       if (mode === 'login') {
-        await login(form.email, form.password);
-        navigate(DASHBOARDS[tab] || '/teacher/dashboard');
+        const res = await login(form.email, form.password);
+        const targetRole = res?.user?.role || tab;
+        navigate(DASHBOARDS[targetRole] || '/teacher/dashboard');
       } else {
-        // Handle signup via Supabase auth if needed, but for now we'll just show an error
-        setError('Signup should be handled via Supabase API (disabled for demo)');
+        try {
+          const res = await api.post('/auth/signup', {
+            name: form.name,
+            email: form.email,
+            password: form.password,
+            role: tab,
+            collegeName: form.collegeName,
+            employeeId: form.employeeId,
+            studentId: form.studentId,
+            phone: form.phone
+          });
+          if (res.data?.user) {
+            await login(form.email, form.password);
+            navigate(DASHBOARDS[tab] || '/teacher/dashboard');
+            return;
+          }
+        } catch (apiErr) {
+          console.warn('Local signup:', apiErr.message);
+        }
+
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email: form.email,
+          password: form.password,
+          options: {
+            data: {
+              name: form.name,
+              role: tab
+            }
+          }
+        });
+        if (signUpError) throw signUpError;
+        
+        if (data?.user) {
+          await supabase.from('profiles').upsert({
+            id: data.user.id,
+            name: form.name || form.email.split('@')[0],
+            role: tab,
+            email: form.email
+          }).catch(() => {});
+        }
+        
+        navigate(DASHBOARDS[tab] || '/teacher/dashboard');
       }
     } catch (err) {
       setError(err.message || 'Something went wrong');
@@ -52,20 +102,20 @@ const LoginPage = () => {
 
   const demoLogin = async (role) => {
     const demos = {
-      student: { email: 'student@test.com', password: 'test123' },
-      teacher: { email: 'teacher@test.com', password: 'test123' },
-      customer: { email: 'teacher@test.com', password: 'test123' },
-      driver: { email: 'driver@test.com', password: 'test123' },
-      admin: { email: 'admin@test.com', password: 'test123' },
+      student: { email: 'student@test.com', password: 'test123', name: 'Demo Student' },
+      teacher: { email: 'teacher@test.com', password: 'test123', name: 'Demo Teacher' },
+      customer: { email: 'teacher@test.com', password: 'test123', name: 'Demo Customer' },
+      driver: { email: 'driver@test.com', password: 'test123', name: 'Demo Driver' },
+      admin: { email: 'admin@test.com', password: 'test123', name: 'Demo Admin' },
     };
     setError(''); setLoading(true);
     try {
       const { email, password } = demos[role];
-      // We use the Supabase login logic which takes email and password directly
-      await login(email, password);
-      navigate(DASHBOARDS[role] || '/teacher/dashboard');
+      const res = await login(email, password);
+      const targetRole = res?.user?.role || role;
+      navigate(DASHBOARDS[targetRole] || DASHBOARDS[role] || '/teacher/dashboard');
     } catch (err) {
-      setError(err.response?.data?.message || 'Demo login failed — is the server running?');
+      setError(err.message || 'Demo login failed.');
     } finally {
       setLoading(false);
     }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import AdminSidebar from '../../components/AdminSidebar';
-import api from '../../utils/api';
+import { supabase } from '../../utils/supabaseClient';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const Reports = () => {
@@ -8,7 +8,12 @@ const Reports = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/payments').then(res => setPayments(res.data || [])).catch(console.error).finally(() => setLoading(false));
+    supabase.from('payments')
+      .select('*, user:profiles(name, email)')
+      .order('created_at', { ascending: false })
+      .then(({ data }) => setPayments(data || []))
+      .catch(console.error)
+      .finally(() => setLoading(false));
   }, []);
 
   const totalRevenue = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
@@ -27,7 +32,7 @@ const Reports = () => {
   const handleExportCSV = () => {
     if (!payments.length) return alert('No payment data to export');
     const headers = ['Transaction ID,User,Amount,Method,Status,Date\n'];
-    const rows = payments.map(p => `${p.transactionId || p._id},${p.user?.name || 'User'},${p.amount},${p.method},${p.status},${new Date(p.createdAt).toISOString()}`);
+    const rows = payments.map(p => `${p.id},${p.user?.name || 'User'},${p.amount},${p.method},${p.status},${new Date(p.created_at).toISOString()}`);
     const csvContent = 'data:text/csv;charset=utf-8,' + headers.concat(rows).join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
@@ -100,9 +105,9 @@ const Reports = () => {
                 </thead>
                 <tbody>
                   {payments.map(p => (
-                    <tr key={p._id}>
-                      <td>{new Date(p.createdAt).toLocaleString()}</td>
-                      <td className="font-mono text-xs">{p.transactionId || p._id.substr(0,8)}</td>
+                    <tr key={p.id}>
+                      <td>{new Date(p.created_at).toLocaleString()}</td>
+                      <td className="font-mono text-xs">{p.id.substr(0,8)}</td>
                       <td className="font-bold">{p.user?.name || 'User'}</td>
                       <td>{p.method}</td>
                       <td className="font-bold text-primary">₹{p.amount}</td>

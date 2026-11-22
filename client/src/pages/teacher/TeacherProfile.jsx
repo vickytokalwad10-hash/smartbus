@@ -3,7 +3,7 @@ import TeacherNavbar from '../../components/TeacherNavbar';
 import PassStatusChip from '../../components/PassStatusChip';
 import QRCodeCard from '../../components/QRCodeCard';
 import { useAuth } from '../../context/AuthContext';
-import api from '../../utils/api';
+import { supabase } from '../../utils/supabaseClient';
 
 const TeacherProfile = () => {
   const { user } = useAuth();
@@ -21,15 +21,16 @@ const TeacherProfile = () => {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [user]);
 
   const fetchData = async () => {
+    if (!user) return;
     setLoading(true);
     try {
       const [pRes, payRes, compRes] = await Promise.all([
-        api.get('/passes/mine'),
-        api.get('/payments/mine'),
-        api.get('/complaints/mine')
+        supabase.from('passes').select('*, route:routes(*)').eq('user_id', user.id).order('created_at', { ascending: false }),
+        supabase.from('payments').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+        supabase.from('complaints').select('*').eq('user_id', user.id).order('created_at', { ascending: false })
       ]);
       setPasses(pRes.data || []);
       setPayments(payRes.data || []);
@@ -44,9 +45,9 @@ const TeacherProfile = () => {
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
-    if (!complaintText.trim()) return;
+    if (!complaintText.trim() || !user) return;
     try {
-      await api.post('/complaints', { type: complaintType, description: complaintText });
+      await supabase.from('complaints').insert([{ type: complaintType, description: complaintText, user_id: user.id }]);
       setComplaintText('');
       setShowModal(false);
       fetchData();
@@ -131,23 +132,23 @@ const TeacherProfile = () => {
                 <div className="space-y-4">
                   {passes.map(p => (
                     <div
-                      key={p._id}
+                      key={p.id}
                       onClick={() => setSelectedPass(p)}
                       className={`card p-5 cursor-pointer border-2 transition-all flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 ${
-                        selectedPass?._id === p._id ? 'border-primary bg-primary/5' : 'hover:border-outline-variant'
+                        selectedPass?.id === p.id ? 'border-primary bg-primary/5' : 'hover:border-outline-variant'
                       }`}
                     >
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
-                          <span className="font-black text-primary text-lg">{p.passId}</span>
+                          <span className="font-black text-primary text-lg">{p.pass_id}</span>
                           <PassStatusChip status={p.status} />
                         </div>
                         <p className="text-sm font-bold text-on-surface">{p.route?.name || 'JD College Campus Express'}</p>
                         <p className="text-xs text-on-surface-variant">
-                          Stops: {p.boardingPoint} → {p.destinationStop}
+                          Stops: {p.boarding_point} → {p.destination_stop}
                         </p>
                         <p className="text-xs text-on-surface-variant">
-                          Valid: {new Date(p.validFrom).toLocaleDateString()} to {new Date(p.validUntil).toLocaleDateString()}
+                          Valid: {new Date(p.created_at).toLocaleDateString()} to {new Date(p.valid_until).toLocaleDateString()}
                         </p>
                       </div>
 
@@ -183,9 +184,9 @@ const TeacherProfile = () => {
                 </thead>
                 <tbody>
                   {payments.map(pay => (
-                    <tr key={pay._id}>
-                      <td>{new Date(pay.createdAt).toLocaleString()}</td>
-                      <td className="font-mono text-xs">{pay.transactionId || pay._id.substr(0,8)}</td>
+                    <tr key={pay.id}>
+                      <td>{new Date(pay.created_at).toLocaleString()}</td>
+                      <td className="font-mono text-xs">{pay.id.substr(0,8)}</td>
                       <td>{pay.description}</td>
                       <td>{pay.method}</td>
                       <td className="font-bold text-primary">₹{pay.amount}</td>
@@ -214,7 +215,7 @@ const TeacherProfile = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {complaints.map(c => (
-                <div key={c._id} className="card p-5 border-l-4 border-tertiary space-y-2">
+                <div key={c.id} className="card p-5 border-l-4 border-tertiary space-y-2">
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold uppercase tracking-wider text-tertiary bg-tertiary/10 px-2 py-0.5 rounded">
                       {c.type}
@@ -226,7 +227,7 @@ const TeacherProfile = () => {
                     </span>
                   </div>
                   <p className="text-sm font-semibold text-on-surface">{c.description}</p>
-                  <p className="text-[11px] text-on-surface-variant">Submitted on: {new Date(c.createdAt).toLocaleString()}</p>
+                  <p className="text-[11px] text-on-surface-variant">Submitted on: {new Date(c.created_at).toLocaleString()}</p>
                 </div>
               ))}
             </div>

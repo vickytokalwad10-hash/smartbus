@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import TeacherNavbar from '../../components/TeacherNavbar';
 import PassStatusChip from '../../components/PassStatusChip';
 import { useAuth } from '../../context/AuthContext';
-import api from '../../utils/api';
+import { supabase } from '../../utils/supabaseClient';
 
 const TeacherDashboard = () => {
   const { user } = useAuth();
@@ -17,12 +17,11 @@ const TeacherDashboard = () => {
     const fetchData = async () => {
       try {
         const [routesRes, passesRes] = await Promise.all([
-          api.get('/routes/frequent'),
-          api.get('/passes/mine')
+          supabase.from('routes').select('*').limit(4),
+          user ? supabase.from('passes').select('*, route:routes(*)').eq('user_id', user.id).eq('status', 'active').order('created_at', { ascending: false }) : Promise.resolve({ data: [] })
         ]);
         setFrequentRoutes(routesRes.data || []);
-        const found = (passesRes.data || []).find(p => p.status === 'active');
-        setActivePass(found || (passesRes.data || [])[0] || null);
+        setActivePass(passesRes.data?.[0] || null);
       } catch (err) {
         console.error('Error fetching teacher dashboard data:', err);
       } finally {
@@ -30,7 +29,7 @@ const TeacherDashboard = () => {
       }
     };
     fetchData();
-  }, []);
+  }, [user]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();

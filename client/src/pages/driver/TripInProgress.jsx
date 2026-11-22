@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import DriverNavbar from '../../components/DriverNavbar';
 import SeatOccupancyBar from '../../components/SeatOccupancyBar';
 import { supabase } from '../../utils/supabaseClient';
+import api from '../../utils/api';
 
 const TripInProgress = () => {
   const navigate = useNavigate();
@@ -10,7 +11,7 @@ const TripInProgress = () => {
   const tripId = location.state?.tripId;
 
   const [trip, setTrip] = useState(null);
-  const [occupancy, setOccupancy] = useState(0);
+  const [occupancy, setOccupancy] = useState(24);
   const [capacity, setCapacity] = useState(50);
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
@@ -22,40 +23,98 @@ const TripInProgress = () => {
   const watchIdRef = useRef(null);
 
   useEffect(() => {
-    // Supabase Channel setup
-    channelRef.current = supabase.channel('bus_tracking', {
-      config: { broadcast: { self: true } }
-    });
-    channelRef.current.subscribe();
+    try {
+      channelRef.current = supabase.channel('bus_tracking', {
+        config: { broadcast: { self: true } }
+      });
+      channelRef.current.subscribe();
+    } catch (e) {
+      console.warn('Realtime channel error:', e);
+    }
 
     fetchTripDetails();
 
     return () => {
       if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
+      if (channelRef.current) supabase.removeChannel(channelRef.current).catch(() => {});
     };
   }, []);
 
   const fetchTripDetails = async () => {
     try {
       let data = null;
+
+      // 1. Try local MongoDB API
       if (tripId) {
-        const res = await supabase.from('trips').select('*, bus:buses(*), route:routes(*)').eq('id', tripId).single();
-        data = res.data;
-      } else {
-        const res = await supabase.from('trips').select('*, bus:buses(*), route:routes(*)').eq('status', 'in-progress').limit(1).single();
-        data = res.data;
+        try {
+          const res = await api.get(`/trips/${tripId}`);
+          if (res.data) data = res.data;
+        } catch (e) {
+          console.warn('API get trip failed:', e.message);
+        }
       }
 
-      if (data) {
-        setTrip(data);
-        setOccupancy(data.bus?.current_occupancy || 15);
-        setCapacity(data.bus?.capacity || 50);
-        setCurrentStopIndex(data.current_stop || 0);
+      if (!data) {
+        try {
+          const res = await api.get('/trips/assigned');
+          if (res.data) data = res.data;
+        } catch (e) {}
+      }
 
-        if (data.bus?.id) {
-          startGpsTracking(data.bus.id, data.route?.id, data.id);
+      // 2. Try Supabase
+      if (!data) {
+        try {
+          if (tripId) {
+            const res = await supabase.from('trips').select('*, bus:buses(*), route:routes(*)').eq('id', tripId).single();
+            data = res.data;
+          } else {
+            const res = await supabase.from('trips').select('*, bus:buses(*), route:routes(*)').eq('status', 'in-progress').limit(1).single();
+            data = res.data;
+          }
+        } catch (sbErr) {
+          console.warn('Supabase trip error:', sbErr.message);
         }
+      }
+
+      // 3. Fallback demo trip
+      if (!data) {
+        data = {
+          _id: 'demo-trip-42a',
+          id: 'demo-trip-42a',
+          route: {
+            route_number: '42A',
+            routeNumber: '42A',
+            name: 'JD College Campus Express',
+            stops: [
+              { name: 'Sitabuldi Interchange', order: 1 },
+              { name: 'Jhansi Rani Square', order: 2 },
+              { name: 'Dharampeth Market', order: 3 },
+              { name: 'JD College Main Gate', order: 4 },
+              { name: 'Hostel Block', order: 5 }
+            ]
+          },
+          bus: {
+            bus_number: 'MH-31-FC-4201',
+            busNumber: 'MH-31-FC-4201',
+            capacity: 50,
+            current_occupancy: 24,
+            currentOccupancy: 24
+          },
+          current_stop: 0,
+          currentStop: 0
+        };
+      }
+
+      setTrip(data);
+      setOccupancy(data.bus?.current_occupancy || data.bus?.currentOccupancy || 24);
+      setCapacity(data.bus?.capacity || 50);
+      setCurrentStopIndex(data.current_stop || data.currentStop || 0);
+
+      const busId = data.bus?.id || data.bus?._id;
+      const routeId = data.route?.id || data.route?._id;
+      const tId = data.id || data._id;
+      if (busId) {
+        startGpsTracking(busId, routeId, tId);
       }
     } catch (err) {
       console.error('Error loading trip:', err);
@@ -69,17 +128,16 @@ const TripInProgress = () => {
         (pos) => {
           const { latitude: lat, longitude: lng } = pos.coords;
           
-          // Broadcast to Supabase Realtime
           if (channelRef.current) {
             channelRef.current.send({
               type: 'broadcast',
               event: 'bus_location_update',
               payload: { busId, lat, lng, routeId, tripId: tripIdVal }
-            });
+            }).catch(() => {});
           }
 
-          // Optionally update DB
-          supabase.from('buses').update({ last_location: { lat, lng, updated_at: new Date() } }).eq('id', busId).then();
+          api.post(`/trips/${tripIdVal}/gps`, { lat, lng }).catch(() => {});
+          supabase.from('buses').update({ last_location: { lat, lng, updated_at: new Date() } }).eq('id', busId).then().catch(() => {});
         },
         (err) => console.warn('GPS watch error:', err.message),
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
@@ -90,25 +148,22 @@ const TripInProgress = () => {
   const handleOccupancyChange = (delta) => {
     const newCount = Math.max(0, Math.min(capacity, occupancy + delta));
     setOccupancy(newCount);
-    if (trip?.bus?.id && channelRef.current) {
-      channelRef.current.send({
-        type: 'broadcast',
-        event: 'bus_occupancy_update',
-        payload: { busId: trip.bus.id, current: newCount, capacity, routeId: trip.route?.id }
-      });
-      // Update DB
-      supabase.from('buses').update({ current_occupancy: newCount }).eq('id', trip.bus.id).then();
+    const busId = trip?.bus?.id || trip?.bus?._id;
+    if (busId) {
+      api.post(`/trips/${trip._id || trip.id}/occupancy`, { occupancy: newCount }).catch(() => {});
+      supabase.from('buses').update({ current_occupancy: newCount }).eq('id', busId).then().catch(() => {});
     }
   };
 
   const handleAdvanceStop = async () => {
     if (!trip) return;
+    const nextIndex = currentStopIndex + 1;
+    setCurrentStopIndex(nextIndex);
+    const tId = trip._id || trip.id;
     try {
-      const nextIndex = currentStopIndex + 1;
-      await supabase.from('trips').update({ current_stop: nextIndex }).eq('id', trip.id);
-      setCurrentStopIndex(nextIndex);
-    } catch (err) {
-      console.error('Error advancing stop:', err);
+      await api.post(`/trips/${tId}/stop`);
+    } catch (e) {
+      await supabase.from('trips').update({ current_stop: nextIndex }).eq('id', tId).catch(() => {});
     }
   };
 
@@ -152,7 +207,7 @@ const TripInProgress = () => {
                 {isBroadcasting ? 'GPS Telemetry Active' : 'Trip In Progress'}
               </p>
               <p className="text-sm font-black text-on-surface">
-                Bus {trip?.bus?.bus_number || 'MH-01-AB-4201'} · Route {trip?.route?.route_number || '42A'}
+                Bus {trip?.bus?.bus_number || trip?.bus?.busNumber || 'MH-01-AB-4201'} · Route {trip?.route?.route_number || trip?.route?.routeNumber || '42A'}
               </p>
             </div>
           </div>
@@ -161,7 +216,7 @@ const TripInProgress = () => {
             <button onClick={() => navigate('/driver/scanner')} className="btn-secondary flex-1 sm:flex-none text-xs py-2 px-3 sm:px-4 flex items-center justify-center gap-1">
               <span className="material-symbols-outlined text-sm">qr_code_scanner</span> Scan
             </button>
-            <button onClick={() => navigate('/driver/summary', { state: { tripId: trip?.id, passengerCount: occupancy } })} className="btn-primary flex-1 sm:flex-none text-xs py-2 px-3 sm:px-4">
+            <button onClick={() => navigate('/driver/summary', { state: { tripId: trip?.id || trip?._id, passengerCount: occupancy } })} className="btn-primary flex-1 sm:flex-none text-xs py-2 px-3 sm:px-4">
               End Trip
             </button>
           </div>
