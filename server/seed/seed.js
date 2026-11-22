@@ -104,14 +104,30 @@ const seed = async () => {
 
   // --- PASSES ---
   const now = new Date();
+  const pastStart = new Date(now.getTime() - 150 * 24 * 60 * 60 * 1000);
+  const pastEnd = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const validUntil = new Date(); validUntil.setDate(validUntil.getDate() + 120);
+
   const passes = await Pass.insertMany([
+    // Expired tenure pass with unused taps that rolled over
+    {
+      passId: 'JDC-AARAV-PREV-2023',
+      user: users[0]._id, route: routes[0]._id,
+      boardingPoint: 'Sitabuldi Interchange', destinationStop: 'JD College Main Gate',
+      duration: 'semester', passType: 'student', amount: 600,
+      status: 'expired', validFrom: pastStart, validUntil: pastEnd,
+      totalTaps: 240, usedTaps: 228, rolloverTapsIn: 0, rolloverTapsOut: 12, rolloverClaimed: true,
+      qrData: JSON.stringify({ passId: 'JDC-AARAV-PREV-2023', userId: users[0]._id })
+    },
+    // Current active pass with 12 rollover taps carried forward from previous tenure
     {
       passId: 'JDC-AARAV001-2024',
       user: users[0]._id, route: routes[0]._id,
       boardingPoint: 'Sitabuldi Interchange', destinationStop: 'JD College Main Gate',
       duration: 'semester', passType: 'student', amount: 600,
       status: 'active', validFrom: now, validUntil,
+      totalTaps: 252, usedTaps: 34, rolloverTapsIn: 12, rolloverTapsOut: 0, rolloverClaimed: false,
+      linkedPreviousPassId: 'JDC-AARAV-PREV-2023',
       qrData: JSON.stringify({ passId: 'JDC-AARAV001-2024', userId: users[0]._id })
     },
     {
@@ -120,6 +136,7 @@ const seed = async () => {
       boardingPoint: 'Dharampeth Market', destinationStop: 'Hostel Block',
       duration: 'monthly', passType: 'student', amount: 250,
       status: 'active', validFrom: now, validUntil: new Date(now.getTime() + 30*24*60*60*1000),
+      totalTaps: 60, usedTaps: 18, rolloverTapsIn: 0, rolloverTapsOut: 0, rolloverClaimed: false,
       qrData: JSON.stringify({ passId: 'JDC-ANANYA002-2024', userId: users[1]._id })
     },
     {
@@ -128,6 +145,7 @@ const seed = async () => {
       boardingPoint: 'Nagpur Central Station', destinationStop: 'JD College Wardha Rd Stop',
       duration: 'monthly', passType: 'teacher', amount: 350,
       status: 'active', validFrom: now, validUntil: new Date(now.getTime() + 30*24*60*60*1000),
+      totalTaps: 68, usedTaps: 22, rolloverTapsIn: 8, rolloverTapsOut: 0, rolloverClaimed: false,
       qrData: JSON.stringify({ passId: 'JDC-RAJESH003-2024', userId: users[2]._id })
     },
     {
@@ -136,6 +154,7 @@ const seed = async () => {
       boardingPoint: 'Civil Lines Terminal', destinationStop: 'JD College Extension',
       duration: 'weekly', passType: 'teacher', amount: 105,
       status: 'pending', validFrom: now, validUntil: new Date(now.getTime() + 7*24*60*60*1000),
+      totalTaps: 14, usedTaps: 0, rolloverTapsIn: 0, rolloverTapsOut: 0, rolloverClaimed: false,
       qrData: JSON.stringify({ passId: 'JDC-SUNITA004-2024', userId: users[3]._id })
     },
   ]);

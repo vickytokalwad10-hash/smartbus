@@ -12,11 +12,10 @@ const paymentSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-paymentSchema.pre('save', function (next) {
+paymentSchema.pre('save', function () {
   if (!this.transactionId) {
     this.transactionId = 'TXN-' + Date.now().toString(36).toUpperCase();
   }
-  next();
 });
 
 module.exports = mongoose.model('Payment', paymentSchema);

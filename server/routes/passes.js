@@ -11,6 +11,9 @@ const calcValidity = (duration) => {
   return d;
 };
 
+// Base tap allotment per duration tenure (e.g. 2 taps/day)
+const durationTapsMap = { daily: 2, weekly: 14, monthly: 60, semester: 240, annual: 730 };
+
 // GET /api/passes/mine — user's own passes
 router.get('/mine', protect, async (req, res) => {
   try {
@@ -21,6 +24,34 @@ router.get('/mine', protect, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
+// GET /api/passes/rollover-preview — preview unused taps from previous pass for current user
+router.get('/rollover-preview', protect, async (req, res) => {
+  try {
+    const prevPass = await Pass.findOne({
+      user: req.user._id,
+      rolloverClaimed: { $ne: true }
+    }).sort({ createdAt: -1 });
+
+    if (!prevPass) {
+      return res.json({ eligibleTaps: 0, previousPass: null });
+    }
+
+    const unusedTaps = Math.max(0, (prevPass.totalTaps || 0) - (prevPass.usedTaps || 0));
+    res.json({
+      eligibleTaps: unusedTaps,
+      previousPass: {
+        passId: prevPass.passId,
+        duration: prevPass.duration,
+        totalTaps: prevPass.totalTaps,
+        usedTaps: prevPass.usedTaps,
+        remainingTaps: unusedTaps,
+        validUntil: prevPass.validUntil,
+        status: prevPass.status
+      }
+    });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
 // GET /api/passes/:id — single pass (for QR validation)
 router.get('/:id', protect, async (req, res) => {
   try {
@@ -28,8 +59,68 @@ router.get('/:id', protect, async (req, res) => {
       .populate('user', 'name email studentId employeeId role')
       .populate('route', 'routeNumber name');
     if (!pass) return res.status(404).json({ message: 'Pass not found', valid: false });
-    const valid = pass.status === 'active' && new Date(pass.validUntil) > new Date();
-    res.json({ ...pass.toObject(), valid });
+    
+    const isExpiredDate = new Date(pass.validUntil) <= new Date();
+    const remaining = Math.max(0, (pass.totalTaps || 0) - (pass.usedTaps || 0));
+    const isTapExhausted = pass.totalTaps != null && remaining <= 0;
+    const valid = pass.status === 'active' && !isExpiredDate && !isTapExhausted;
+
+    let reason = '';
+    if (pass.status !== 'active') reason = `Pass is ${pass.status}`;
+    else if (isExpiredDate) reason = 'Pass has expired';
+    else if (isTapExhausted) reason = 'Tap limit reached (0 remaining taps)';
+
+    res.json({
+      ...pass.toObject(),
+      valid,
+      remainingTaps: remaining,
+      reason
+    });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// POST /api/passes/:id/tap — record a pass tap/ride
+router.post('/:id/tap', protect, async (req, res) => {
+  try {
+    const pass = await Pass.findOne({ passId: req.params.id })
+      .populate('user', 'name email studentId employeeId role')
+      .populate('route', 'routeNumber name');
+
+    if (!pass) return res.status(404).json({ ok: false, message: 'Pass not found' });
+
+    if (pass.status !== 'active') {
+      return res.status(400).json({ ok: false, message: `Pass is ${pass.status}` });
+    }
+
+    if (new Date(pass.validUntil) <= new Date()) {
+      return res.status(400).json({ ok: false, message: 'Pass has expired' });
+    }
+
+    const remaining = Math.max(0, (pass.totalTaps || 0) - (pass.usedTaps || 0));
+    if (remaining <= 0) {
+      return res.status(400).json({ ok: false, message: 'Tap limit reached (0 remaining taps)' });
+    }
+
+    pass.usedTaps = (pass.usedTaps || 0) + 1;
+    await pass.save();
+
+    const updatedRemaining = Math.max(0, pass.totalTaps - pass.usedTaps);
+    const usedFromRollover = pass.usedTaps > (pass.totalTaps - pass.rolloverTapsIn);
+
+    res.json({
+      ok: true,
+      message: 'Tap verified and recorded',
+      pass: {
+        passId: pass.passId,
+        totalTaps: pass.totalTaps,
+        usedTaps: pass.usedTaps,
+        remainingTaps: updatedRemaining,
+        rolloverTapsIn: pass.rolloverTapsIn,
+        usedFromRollover,
+        user: pass.user,
+        route: pass.route
+      }
+    });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
@@ -62,6 +153,31 @@ router.post('/', protect, async (req, res) => {
       amount = Math.round(amount * 0.7); // 30% faculty discount for teachers
     }
 
+    // Calculate base taps according to tenure duration
+    const baseTaps = durationTapsMap[duration] || 60;
+    let rolloverTapsIn = 0;
+    let linkedPreviousPassId = null;
+
+    // Check for leftover unused taps from previous pass tenure
+    const prevPass = await Pass.findOne({
+      user: req.user._id,
+      rolloverClaimed: { $ne: true }
+    }).sort({ createdAt: -1 });
+
+    if (prevPass) {
+      const unused = Math.max(0, (prevPass.totalTaps || 0) - (prevPass.usedTaps || 0));
+      if (unused > 0) {
+        rolloverTapsIn = unused;
+        linkedPreviousPassId = prevPass.passId || prevPass._id.toString();
+        // Mark previous pass rollover as claimed
+        prevPass.rolloverClaimed = true;
+        prevPass.rolloverTapsOut = unused;
+        await prevPass.save();
+      }
+    }
+
+    const totalTaps = baseTaps + rolloverTapsIn;
+
     const pass = await Pass.create({
       user: req.user._id,
       route: routeId,
@@ -73,7 +189,13 @@ router.post('/', protect, async (req, res) => {
       paymentMethod,
       status: 'active',
       validFrom: new Date(),
-      validUntil: calcValidity(duration)
+      validUntil: calcValidity(duration),
+      totalTaps,
+      usedTaps: 0,
+      rolloverTapsIn,
+      rolloverTapsOut: 0,
+      rolloverClaimed: false,
+      linkedPreviousPassId
     });
 
     // Create payment record

@@ -15,15 +15,29 @@ const passSchema = new mongoose.Schema({
   idCardUrl: { type: String },
   paymentMethod: { type: String },
   qrData: { type: String },
+  totalTaps: { type: Number, default: 60 },
+  usedTaps: { type: Number, default: 0 },
+  rolloverTapsIn: { type: Number, default: 0 },
+  rolloverTapsOut: { type: Number, default: 0 },
+  rolloverClaimed: { type: Boolean, default: false },
+  linkedPreviousPassId: { type: String },
   createdAt: { type: Date, default: Date.now }
 });
 
-passSchema.pre('save', function (next) {
+passSchema.virtual('remainingTaps').get(function () {
+  return Math.max(0, (this.totalTaps || 0) - (this.usedTaps || 0));
+});
+
+passSchema.set('toJSON', { virtuals: true });
+passSchema.set('toObject', { virtuals: true });
+
+passSchema.pre('save', function () {
   if (!this.passId) {
     this.passId = 'JDC-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substr(2, 4).toUpperCase();
   }
-  this.qrData = JSON.stringify({ passId: this.passId, userId: this.user.toString() });
-  next();
+  if (this.user) {
+    this.qrData = JSON.stringify({ passId: this.passId, userId: this.user.toString() });
+  }
 });
 
 module.exports = mongoose.model('Pass', passSchema);

@@ -4,6 +4,7 @@ import StudentSidebar from '../../components/StudentSidebar';
 import PassStatusChip from '../../components/PassStatusChip';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../utils/supabaseClient';
+import api from '../../utils/api';
 
 const StudentDashboard = () => {
   const { user } = useAuth();
@@ -13,19 +14,34 @@ const StudentDashboard = () => {
 
   useEffect(() => {
     fetchPass();
-  }, []);
+  }, [user]);
 
   const fetchPass = async () => {
     try {
+      // 1. Try local MongoDB API
+      try {
+        const res = await api.get('/passes/mine');
+        if (res.data && res.data.length > 0) {
+          const found = res.data.find(p => p.status === 'active') || res.data[0];
+          setActivePass(found);
+          setLoading(false);
+          return;
+        }
+      } catch (apiErr) {
+        console.warn('API passes fetch failed, checking Supabase fallback:', apiErr.message);
+      }
+
+      // 2. Try Supabase fallback
       const { data, error } = await supabase
         .from('passes')
         .select('*, route:routes(name)')
-        .eq('user_id', user.id)
+        .eq('user_id', user?.id)
         .order('created_at', { ascending: false });
         
-      if (error) throw error;
-      const found = (data || []).find(p => p.status === 'active') || (data || [])[0];
-      setActivePass(found || null);
+      if (!error && data) {
+        const found = data.find(p => p.status === 'active') || data[0];
+        setActivePass(found || null);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -82,28 +98,43 @@ const StudentDashboard = () => {
                 <div className="grid grid-cols-2 gap-4 text-xs">
                   <div>
                     <span className="opacity-70 block">Registered Route:</span>
-                    <span className="font-bold text-sm">{activePass.route?.name || 'VNIT Campus Express (Route 42A)'}</span>
+                    <span className="font-bold text-sm">{activePass.route?.name || 'JD College Campus Express (Route 42A)'}</span>
                   </div>
                   <div>
                     <span className="opacity-70 block">Boarding / Stop:</span>
-                    <span className="font-bold text-sm">{activePass.boarding_point || 'Sitabuldi'} → {activePass.destination_stop || 'VNIT Gate'}</span>
+                    <span className="font-bold text-sm">{activePass.boardingPoint || activePass.boarding_point || 'Sitabuldi'} → {activePass.destinationStop || activePass.destination_stop || 'JD College Main Gate'}</span>
                   </div>
                   <div>
                     <span className="opacity-70 block">Pass ID:</span>
-                    <span className="font-mono font-bold text-sm">{activePass.pass_id}</span>
+                    <span className="font-mono font-bold text-sm">{activePass.passId || activePass.pass_id}</span>
                   </div>
                   <div>
                     <span className="opacity-70 block">Valid Until:</span>
-                    <span className="font-bold text-sm">{new Date(activePass.valid_until).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                    <span className="font-bold text-sm">{new Date(activePass.validUntil || activePass.valid_until).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                   </div>
                 </div>
 
-                {activePass.rollover_days_in > 0 && (
-                  <div className="mt-3 bg-white/20 p-2 rounded-lg text-xs font-bold flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[14px]">redeem</span>
-                    Rollover Balance: {activePass.rollover_days_in} days carried forward from your previous pass!
+                {/* Taps & Rollover Information */}
+                <div className="mt-3 bg-white/10 p-3 rounded-xl space-y-2 border border-white/20">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5 font-bold">
+                      <span className="material-symbols-outlined text-[16px]">contactless</span>
+                      Remaining Taps:
+                    </span>
+                    <span className="font-black text-sm bg-white/20 px-2.5 py-0.5 rounded-full">
+                      {(activePass.remainingTaps != null ? activePass.remainingTaps : (activePass.totalTaps != null ? Math.max(0, activePass.totalTaps - (activePass.usedTaps || 0)) : 218))} / {activePass.totalTaps || 252} Taps left
+                    </span>
                   </div>
-                )}
+
+                  {(activePass.rolloverTapsIn > 0 || activePass.rollover_taps_in > 0 || activePass.rollover_days_in > 0) && (
+                    <div className="bg-emerald-500/25 text-white p-2 rounded-lg text-xs font-semibold flex items-center gap-2 border border-emerald-400/30">
+                      <span className="material-symbols-outlined text-[16px] text-emerald-300">autorenew</span>
+                      <span>
+                        <strong>Tap Rollover Applied:</strong> {activePass.rolloverTapsIn || activePass.rollover_taps_in || activePass.rollover_days_in} unused taps carried forward from your previous tenure!
+                      </span>
+                    </div>
+                  )}
+                </div>
 
                 <div className="pt-2 flex justify-between items-center">
                   <button onClick={() => navigate('/student/pass')} className="btn-secondary bg-white text-primary border-white hover:bg-surface-container-low text-xs font-bold">

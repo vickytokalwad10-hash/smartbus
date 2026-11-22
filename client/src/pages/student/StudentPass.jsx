@@ -5,6 +5,7 @@ import QRCodeCard from '../../components/QRCodeCard';
 import PassStatusChip from '../../components/PassStatusChip';
 import { supabase } from '../../utils/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import api from '../../utils/api';
 
 function formatDate(dateStr) {
   if (!dateStr) return '—';
@@ -39,11 +40,25 @@ export default function StudentPass() {
     const fetchPasses = async () => {
       if (!user) return;
       try {
+        // 1. Try local MongoDB API
+        try {
+          const res = await api.get('/passes/mine');
+          if (res.data && res.data.length > 0) {
+            setPasses(res.data);
+            const active = res.data.find((p) => p.status === 'active') || res.data[0] || null;
+            setSelectedPass(active);
+            setLoading(false);
+            return;
+          }
+        } catch (apiErr) {
+          console.warn('API passes fetch failed, checking Supabase:', apiErr.message);
+        }
+
+        // 2. Try Supabase
         const { data, error } = await supabase.from('passes').select('*, route:routes(*)').eq('user_id', user.id).order('created_at', { ascending: false });
         if (error) throw error;
         const list = Array.isArray(data) ? data : [data];
         setPasses(list);
-        // Auto-select the first active pass, else the first pass
         const active = list.find((p) => p.status === 'active') || list[0] || null;
         setSelectedPass(active);
       } catch (err) {
@@ -57,13 +72,17 @@ export default function StudentPass() {
 
   const isActive = selectedPass?.status === 'active';
   const routeName =
-    selectedPass?.route?.name || selectedPass?.routeName || 'Route 42 – City Center Express';
-  const boarding = selectedPass?.boarding_point || 'Main Gate';
-  const destination = selectedPass?.destination_stop || 'City Center';
-  const duration = selectedPass?.duration || 'Monthly';
-  const validFrom = formatDate(selectedPass?.created_at);
-  const validUntil = formatDate(selectedPass?.valid_until);
-  const amountPaid = selectedPass?.amount ?? 500;
+    selectedPass?.route?.name || selectedPass?.routeName || 'Route 42 – JD College Campus Express';
+  const boarding = selectedPass?.boardingPoint || selectedPass?.boarding_point || 'Sitabuldi Interchange';
+  const destination = selectedPass?.destinationStop || selectedPass?.destination_stop || 'JD College Main Gate';
+  const duration = selectedPass?.duration || 'Semester';
+  const validFrom = formatDate(selectedPass?.validFrom || selectedPass?.created_at);
+  const validUntil = formatDate(selectedPass?.validUntil || selectedPass?.valid_until);
+  const amountPaid = selectedPass?.amount ?? 600;
+  const totalTaps = selectedPass?.totalTaps ?? 252;
+  const usedTaps = selectedPass?.usedTaps ?? 34;
+  const remainingTaps = selectedPass?.remainingTaps ?? Math.max(0, totalTaps - usedTaps);
+  const rolloverTaps = selectedPass?.rolloverTapsIn ?? 12;
 
   return (
     <div className="flex bg-background min-h-screen">
@@ -149,6 +168,18 @@ export default function StudentPass() {
                   label="Amount Paid"
                   value={`₹${amountPaid}`}
                 />
+                <PassDetailRow
+                  icon="contactless"
+                  label="Tap Balance"
+                  value={`${remainingTaps} of ${totalTaps} taps left (${usedTaps} used)`}
+                />
+                {rolloverTaps > 0 && (
+                  <PassDetailRow
+                    icon="autorenew"
+                    label="Tap Rollover Applied"
+                    value={`+${rolloverTaps} unused taps carried over from last pass tenure`}
+                  />
+                )}
               </div>
             </div>
 
@@ -158,14 +189,15 @@ export default function StudentPass() {
                 <h3 className="text-title-lg font-semibold text-on-surface mb-4">All Passes</h3>
                 <div className="flex flex-col gap-3">
                   {passes.map((p, i) => {
-                    const isSelected = selectedPass?.id
-                      ? selectedPass.id === p.id
-                      : selectedPass?.pass_id === p.pass_id || i === 0;
+                    const isSelected = selectedPass?._id
+                      ? selectedPass._id === p._id
+                      : (selectedPass?.passId || selectedPass?.pass_id) === (p.passId || p.pass_id) || i === 0;
                     const pRoute = p.route?.name || p.routeName || 'Route';
-                    const pValidity = formatDate(p.valid_until);
+                    const pValidity = formatDate(p.validUntil || p.valid_until);
+                    const pRemaining = p.remainingTaps != null ? p.remainingTaps : (p.totalTaps != null ? Math.max(0, p.totalTaps - (p.usedTaps || 0)) : null);
                     return (
                       <button
-                        key={p.id || p.pass_id || i}
+                        key={p._id || p.id || p.passId || p.pass_id || i}
                         onClick={() => setSelectedPass(p)}
                         className={`flex items-center gap-4 p-4 rounded-xl border text-left transition-all ${
                           isSelected
@@ -189,14 +221,19 @@ export default function StudentPass() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-0.5">
                             <span className="text-label-md font-semibold text-on-surface truncate">
-                              {p.pass_id || p.id || `Pass #${i + 1}`}
+                              {p.passId || p.pass_id || p._id || p.id || `Pass #${i + 1}`}
                             </span>
                             <PassStatusChip status={p.status} />
                           </div>
                           <p className="text-body-sm text-on-surface-variant truncate">{pRoute}</p>
-                          <p className="text-body-sm text-on-surface-variant">
-                            Valid until {pValidity}
-                          </p>
+                          <div className="flex items-center gap-2 text-body-sm text-on-surface-variant">
+                            <span>Valid until {pValidity}</span>
+                            {pRemaining != null && (
+                              <span className="font-semibold text-primary">
+                                • {pRemaining} taps left
+                              </span>
+                            )}
+                          </div>
                         </div>
                         {isSelected && (
                           <span className="material-symbols-outlined text-primary text-xl flex-shrink-0">

@@ -85,11 +85,34 @@ router.post('/:id/gps', protect, authorize('driver'), async (req, res) => {
 router.post('/:id/scan', protect, authorize('driver'), async (req, res) => {
   try {
     const { passId } = req.body;
+    const Pass = require('../models/Pass');
+    let pass = null;
+    if (passId) {
+      pass = await Pass.findOne({ passId });
+      if (pass) {
+        if (pass.status !== 'active') {
+          return res.status(400).json({ ok: false, message: `Pass is ${pass.status}` });
+        }
+        if (new Date(pass.validUntil) <= new Date()) {
+          return res.status(400).json({ ok: false, message: 'Pass has expired' });
+        }
+        const remaining = Math.max(0, (pass.totalTaps || 0) - (pass.usedTaps || 0));
+        if (remaining <= 0) {
+          return res.status(400).json({ ok: false, message: 'Tap limit reached for this pass tenure' });
+        }
+        pass.usedTaps = (pass.usedTaps || 0) + 1;
+        await pass.save();
+      }
+    }
+
     await Trip.findByIdAndUpdate(req.params.id, {
       $push: { scannedPasses: { passId, scannedAt: new Date() } },
       $inc: { passengerCount: 1 }
     });
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      remainingTaps: pass ? Math.max(0, pass.totalTaps - pass.usedTaps) : null
+    });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 

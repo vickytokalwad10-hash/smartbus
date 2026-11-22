@@ -4,6 +4,7 @@ import TeacherNavbar from '../../components/TeacherNavbar';
 import QRCodeCard from '../../components/QRCodeCard';
 import { supabase } from '../../utils/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import api from '../../utils/api';
 
 const BuyPass = () => {
   const navigate = useNavigate();
@@ -22,28 +23,35 @@ const BuyPass = () => {
   const [error, setError] = useState('');
   const [createdPass, setCreatedPass] = useState(null);
   
-  // Phase 8: Pass Rollover
+  // Pass Rollover
   const [rolloverDays, setRolloverDays] = useState(0);
+  const [rolloverTaps, setRolloverTaps] = useState(0);
   const [linkedPreviousPassId, setLinkedPreviousPassId] = useState(null);
 
   useEffect(() => {
-    supabase.from('routes').select('*').then(({ data, error }) => {
-      if (error) {
-        console.error(error);
-        return;
+    // 1. Try MongoDB API
+    api.get('/routes').then(res => {
+      if (res.data && res.data.length > 0) {
+        setRoutes(res.data);
+        if (!selectedRoute) setSelectedRoute(res.data[0]._id || res.data[0].id);
       }
-      setRoutes(data || []);
-      if (data?.length > 0 && !selectedRoute) {
-        setSelectedRoute(data[0].id);
-      }
+    }).catch(() => {
+      // 2. Fallback Supabase
+      supabase.from('routes').select('*').then(({ data, error }) => {
+        if (!error && data) {
+          setRoutes(data);
+          if (data?.length > 0 && !selectedRoute) setSelectedRoute(data[0].id);
+        }
+      });
     });
   }, []);
 
   const plans = [
-    { id: 'daily', label: 'Daily Faculty Pass', basePrice: 30, days: 1, desc: 'Unlimited rides on selected campus route for 24 hours' },
-    { id: 'weekly', label: 'Weekly Faculty Pass', basePrice: 150, days: 7, desc: 'Ideal for weekly lecture schedules & visiting faculty' },
-    { id: 'monthly', label: 'Monthly Faculty Pass', basePrice: 500, days: 30, desc: 'Best value for regular faculty members with 30% discount', popular: true },
-    { id: 'annual', label: 'Annual Faculty Pass', basePrice: 2000, days: 365, desc: 'Full academic year transit pass across all JD College routes' },
+    { id: 'daily', label: 'Daily Faculty Pass', basePrice: 30, days: 1, taps: 2, desc: 'Unlimited rides on selected campus route for 24 hours' },
+    { id: 'weekly', label: 'Weekly Faculty Pass', basePrice: 150, days: 7, taps: 14, desc: 'Ideal for weekly lecture schedules & visiting faculty' },
+    { id: 'monthly', label: 'Monthly Faculty Pass', basePrice: 500, days: 30, taps: 60, desc: 'Best value for regular faculty members with 30% discount', popular: true },
+    { id: 'semester', label: 'Semester Pass', basePrice: 1200, days: 120, taps: 240, desc: 'Coverage across full academic semester' },
+    { id: 'annual', label: 'Annual Faculty Pass', basePrice: 2000, days: 365, taps: 730, desc: 'Full academic year transit pass across all JD College routes' },
   ];
 
   const currentPlan = plans.find(p => p.id === duration) || plans[2];
@@ -52,7 +60,7 @@ const BuyPass = () => {
   const discountMultiplier = isTeacher ? 0.7 : user?.role === 'student' ? 0.5 : 1.0;
   const finalPrice = Math.round(currentPlan.basePrice * discountMultiplier);
 
-  const activeRouteObj = routes.find(r => r.id === selectedRoute);
+  const activeRouteObj = routes.find(r => (r._id || r.id) === selectedRoute);
 
   const handleNextStep = async () => {
     if (step === 2 && (!selectedRoute || !boardingPoint.trim() || !destinationStop.trim())) {
@@ -64,7 +72,18 @@ const BuyPass = () => {
     if (step === 2 && user) {
       try {
         setLoading(true);
-        const { data, error } = await supabase
+        // 1. Try MongoDB rollover preview
+        try {
+          const res = await api.get('/passes/rollover-preview');
+          if (res.data?.eligibleTaps > 0) {
+            setRolloverTaps(res.data.eligibleTaps);
+            setLinkedPreviousPassId(res.data.previousPass?.passId);
+          }
+        } catch (apiErr) {
+          console.warn('API rollover check fallback:', apiErr.message);
+        }
+
+        const { data } = await supabase
           .from('passes')
           .select('id, valid_until, rollover_days_out, rollover_claimed')
           .eq('user_id', user.id)
@@ -86,10 +105,8 @@ const BuyPass = () => {
           
           if (rDays > 0) {
             setRolloverDays(rDays);
-            setLinkedPreviousPassId(data.id);
-          } else {
-            setRolloverDays(0);
-            setLinkedPreviousPassId(null);
+            if (!rolloverTaps) setRolloverTaps(rDays * 2);
+            if (!linkedPreviousPassId) setLinkedPreviousPassId(data.id);
           }
         }
       } catch (err) {}
@@ -104,7 +121,26 @@ const BuyPass = () => {
     setError('');
     try {
       if (!user) throw new Error("Must be logged in");
-      
+
+      // 1. Try local MongoDB API
+      try {
+        const res = await api.post('/passes', {
+          routeId: selectedRoute,
+          boardingPoint: boardingPoint || 'Sitabuldi Interchange',
+          destinationStop: destinationStop || 'JD College Main Gate',
+          duration,
+          paymentMethod
+        });
+        if (res.data) {
+          setCreatedPass(res.data);
+          setStep(4);
+          setLoading(false);
+          return;
+        }
+      } catch (apiErr) {
+        console.warn('API pass create fallback:', apiErr.message);
+      }
+
       const passId = 'SB-FACULTY-' + Math.floor(Math.random() * 1000000);
       const validUntil = new Date();
       validUntil.setDate(validUntil.getDate() + currentPlan.days + rolloverDays);
@@ -285,7 +321,15 @@ const BuyPass = () => {
                   <span className="text-on-surface-variant">Selected Route:</span>
                   <span className="font-bold">Route {activeRouteObj?.route_number || 'All'}</span>
                 </div>
-                {rolloverDays > 0 && (
+                {rolloverTaps > 0 ? (
+                  <div className="flex justify-between text-secondary">
+                    <span className="font-bold flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[14px]">autorenew</span> 
+                      Tap Rollover Applied
+                    </span>
+                    <span className="font-bold">+{rolloverTaps} unused taps</span>
+                  </div>
+                ) : rolloverDays > 0 ? (
                   <div className="flex justify-between text-secondary">
                     <span className="font-bold flex items-center gap-1">
                       <span className="material-symbols-outlined text-[14px]">redeem</span> 
@@ -293,7 +337,7 @@ const BuyPass = () => {
                     </span>
                     <span className="font-bold">+{rolloverDays} days</span>
                   </div>
-                )}
+                ) : null}
                 <div className="flex justify-between">
                   <span className="text-on-surface-variant">Faculty Concession (30%):</span>
                   <span className="font-bold text-secondary">-₹{currentPlan.basePrice - finalPrice}</span>

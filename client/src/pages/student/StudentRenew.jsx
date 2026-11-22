@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import StudentSidebar from '../../components/StudentSidebar';
 import { supabase } from '../../utils/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import api from '../../utils/api';
 
 const DURATION_OPTIONS = [
-  { id: 'weekly', label: 'Weekly', price: 150, icon: 'calendar_view_week', days: 7 },
-  { id: 'monthly', label: 'Monthly', price: 500, icon: 'calendar_month', days: 30 },
-  { id: 'semester', label: 'Semester', price: 1200, icon: 'school', days: 180 },
-  { id: 'annual', label: 'Annual', price: 2000, icon: 'event_available', days: 365 },
+  { id: 'weekly', label: 'Weekly', price: 150, icon: 'calendar_view_week', days: 7, taps: 14 },
+  { id: 'monthly', label: 'Monthly', price: 500, icon: 'calendar_month', days: 30, taps: 60 },
+  { id: 'semester', label: 'Semester', price: 1200, icon: 'school', days: 120, taps: 240 },
+  { id: 'annual', label: 'Annual', price: 2000, icon: 'event_available', days: 365, taps: 730 },
 ];
 
 const PAYMENT_METHODS = [
@@ -38,8 +39,9 @@ export default function StudentRenew() {
   const [success, setSuccess] = useState(false);
   const [errors, setErrors] = useState({});
   
-  // Phase 8: Pass Rollover
+  // Pass Rollover
   const [rolloverDays, setRolloverDays] = useState(0);
+  const [rolloverTaps, setRolloverTaps] = useState(0);
   const [linkedPreviousPassId, setLinkedPreviousPassId] = useState(null);
 
   const currentDuration = DURATION_OPTIONS.find((d) => d.id === selectedDuration);
@@ -47,14 +49,28 @@ export default function StudentRenew() {
   const discount = Math.round(basePrice * CONCESSION_RATE);
   const finalAmount = basePrice - discount;
 
-  const routeStops = routes.find((r) => r.id === selectedRoute)?.stops || [];
+  const routeStops = routes.find((r) => (r._id || r.id) === selectedRoute)?.stops || [];
 
   useEffect(() => {
     const fetchRoutes = async () => {
       try {
+        // 1. Try MongoDB API
+        try {
+          const res = await api.get('/routes');
+          if (res.data && res.data.length > 0) {
+            setRoutes(res.data);
+            if (!selectedRoute) setSelectedRoute(res.data[0]._id || res.data[0].id);
+            setRouteLoading(false);
+            return;
+          }
+        } catch (apiErr) {
+          console.warn('API routes fetch fallback:', apiErr.message);
+        }
+
         const { data, error } = await supabase.from('routes').select('*');
         if (error) throw error;
         setRoutes(data || []);
+        if (data?.length > 0 && !selectedRoute) setSelectedRoute(data[0].id);
       } catch {
         setRoutes([]);
       } finally {
@@ -64,16 +80,29 @@ export default function StudentRenew() {
     fetchRoutes();
   }, []);
   
-  // Check for rollover when duration changes
+  // Check for tap rollover from previous pass tenure
   useEffect(() => {
     const checkRollover = async () => {
-      if (!user || !selectedDuration) return;
+      if (!user) return;
       try {
-        const { data, error } = await supabase
+        // 1. Try MongoDB API preview
+        try {
+          const res = await api.get('/passes/rollover-preview');
+          if (res.data) {
+            const elig = res.data.eligibleTaps || 0;
+            setRolloverTaps(elig);
+            setLinkedPreviousPassId(res.data.previousPass?.passId || null);
+            if (elig > 0) return;
+          }
+        } catch (apiErr) {
+          console.warn('API rollover check failed:', apiErr.message);
+        }
+
+        // 2. Fallback Supabase check
+        const { data } = await supabase
           .from('passes')
           .select('id, valid_until, rollover_days_out, rollover_claimed')
           .eq('user_id', user.id)
-          .eq('duration', selectedDuration)
           .order('valid_until', { ascending: false })
           .limit(1)
           .single();
@@ -82,27 +111,28 @@ export default function StudentRenew() {
           const endDate = new Date(data.valid_until);
           const now = new Date();
           let rDays = 0;
-          
           if (endDate > now) {
             rDays = Math.ceil((endDate - now) / (1000 * 60 * 60 * 24));
           } else if (data.rollover_days_out > 0 && !data.rollover_claimed) {
             rDays = data.rollover_days_out;
           }
-          
           if (selectedDuration === 'weekly') rDays = Math.min(rDays, 7);
           else if (selectedDuration === 'monthly') rDays = Math.min(rDays, 15);
           else rDays = 0;
           
           if (rDays > 0) {
             setRolloverDays(rDays);
+            setRolloverTaps(rDays * 2);
             setLinkedPreviousPassId(data.id);
           } else {
             setRolloverDays(0);
+            setRolloverTaps(0);
             setLinkedPreviousPassId(null);
           }
         }
       } catch (err) {
         setRolloverDays(0);
+        setRolloverTaps(0);
         setLinkedPreviousPassId(null);
       }
     };
@@ -131,6 +161,27 @@ export default function StudentRenew() {
     try {
       if (!user) throw new Error("Must be logged in");
       
+      // 1. Try local MongoDB Express API
+      try {
+        const res = await api.post('/passes', {
+          routeId: selectedRoute,
+          boardingPoint,
+          destinationStop,
+          duration: selectedDuration,
+          paymentMethod: paymentMethod.toUpperCase()
+        });
+        if (res.data) {
+          setSuccess(true);
+          setTimeout(() => {
+            navigate('/student/pass');
+          }, 2000);
+          return;
+        }
+      } catch (apiErr) {
+        console.warn('API pass create failed, trying Supabase fallback:', apiErr.message);
+      }
+
+      // 2. Supabase fallback
       const passId = 'SB-STUDENT-' + Math.floor(Math.random() * 1000000);
       const validUntil = new Date();
       validUntil.setDate(validUntil.getDate() + (currentDuration?.days || 30) + rolloverDays);
@@ -169,7 +220,7 @@ export default function StudentRenew() {
       setSuccess(true);
       setTimeout(() => {
         navigate('/student/pass');
-      }, 2500);
+      }, 2000);
     } catch (err) {
       setErrors({ api: err.message || 'Submission failed. Please try again.' });
     } finally {
@@ -493,6 +544,15 @@ export default function StudentRenew() {
                     </span>
                     <span>- ₹{discount}</span>
                   </div>
+                  <div className="flex justify-between text-body-md text-on-surface">
+                    <span className="flex items-center gap-1">
+                      <span className="material-symbols-outlined text-base">contactless</span>
+                      Tap Allotment
+                    </span>
+                    <span className="font-bold text-primary">
+                      {currentDuration?.taps || 60} {rolloverTaps > 0 ? `+ ${rolloverTaps} rollover` : ''} = {(currentDuration?.taps || 60) + (rolloverTaps || 0)} Taps
+                    </span>
+                  </div>
                   <div className="border-t border-outline-variant pt-3 flex justify-between text-title-md font-bold text-on-surface">
                     <span>Final Amount</span>
                     <span className="text-primary">₹{finalAmount}</span>
@@ -506,7 +566,13 @@ export default function StudentRenew() {
 
                 {/* Summary bullets */}
                 <div className="flex flex-col gap-2 text-body-sm text-on-surface-variant mb-6">
-                  {rolloverDays > 0 && (
+                  {rolloverTaps > 0 && (
+                    <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 font-bold text-xs">
+                      <span className="material-symbols-outlined text-base text-emerald-600">autorenew</span>
+                      <span>+{rolloverTaps} Unused Taps Rollover carried forward from your previous tenure!</span>
+                    </div>
+                  )}
+                  {rolloverDays > 0 && !rolloverTaps && (
                     <div className="flex items-center gap-2 text-secondary font-bold">
                       <span className="material-symbols-outlined text-base">redeem</span>
                       <span>+{rolloverDays} Rollover Days Applied from previous pass!</span>

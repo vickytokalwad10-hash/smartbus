@@ -25,16 +25,38 @@ const PassScanner = () => {
         const res = await api.get(`/passes/${encodeURIComponent(passId)}`);
         if (res.data) {
           const p = res.data;
+          let currentRemaining = p.remainingTaps;
+          let currentUsed = p.usedTaps;
+
+          // If valid, record a tap!
+          if (p.valid !== false && p.status === 'active') {
+            try {
+              const tapRes = await api.post(`/passes/${encodeURIComponent(passId)}/tap`);
+              if (tapRes.data?.pass) {
+                currentRemaining = tapRes.data.pass.remainingTaps;
+                currentUsed = tapRes.data.pass.usedTaps;
+              }
+            } catch (tapErr) {
+              console.warn('Tap record warning:', tapErr.message);
+            }
+          }
+
           setScanResult({
             valid: p.valid !== false && p.status === 'active',
             passId: p.passId || passId,
             user: p.user,
             route: p.route,
-            validUntil: p.validUntil
+            validUntil: p.validUntil,
+            totalTaps: p.totalTaps || 252,
+            usedTaps: currentUsed || 0,
+            remainingTaps: currentRemaining,
+            rolloverTapsIn: p.rolloverTapsIn || 0,
+            message: p.reason
           });
+
           if (p.valid !== false && p.status === 'active') {
             setRecentScans(prev => [
-              { passId: p.passId || passId, name: p.user?.name || 'Aarav Sharma', route: p.route?.routeNumber || '42A', valid: true, time: new Date().toLocaleTimeString() },
+              { passId: p.passId || passId, name: p.user?.name || 'Aarav Sharma', route: p.route?.routeNumber || '42A', valid: true, time: new Date().toLocaleTimeString(), remainingTaps: currentRemaining },
               ...prev.slice(0, 4)
             ]);
           }
@@ -184,10 +206,22 @@ const PassScanner = () => {
                       </div>
                     </div>
 
-                    <div className="text-xs space-y-1 pt-2 border-t border-secondary/20">
+                    <div className="text-xs space-y-1.5 pt-2 border-t border-secondary/20">
                       <p><span className="font-bold">Pass ID:</span> {scanResult.passId}</p>
                       <p><span className="font-bold">Route:</span> Route {scanResult.route?.route_number || scanResult.route?.routeNumber || '42A'}</p>
                       <p><span className="font-bold">Valid Until:</span> {new Date(scanResult.validUntil).toLocaleDateString()}</p>
+                      {scanResult.remainingTaps != null && (
+                        <div className="flex items-center gap-2 pt-1 font-semibold text-secondary-fixed-dim">
+                          <span className="material-symbols-outlined text-sm">contactless</span>
+                          <span>Remaining Taps: {scanResult.remainingTaps} / {scanResult.totalTaps}</span>
+                        </div>
+                      )}
+                      {scanResult.rolloverTapsIn > 0 && (
+                        <div className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[14px]">autorenew</span>
+                          <span>Includes +{scanResult.rolloverTapsIn} taps rolled over from last tenure</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
