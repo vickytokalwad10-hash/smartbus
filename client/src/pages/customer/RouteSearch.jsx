@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import CustomerNavbar from '../../components/CustomerNavbar';
 import SeatOccupancyBar from '../../components/SeatOccupancyBar';
+import api from '../../utils/api';
 import { supabase } from '../../utils/supabaseClient';
 
 const RouteSearch = () => {
@@ -20,6 +21,21 @@ const RouteSearch = () => {
 
   const fetchRoutes = async (q) => {
     setLoading(true);
+
+    // 1. Try Express + MongoDB API
+    try {
+      const endpoint = q ? `/routes/search?query=${encodeURIComponent(q)}` : '/routes';
+      const res = await api.get(endpoint);
+      if (Array.isArray(res.data)) {
+        setRoutes(res.data);
+        setLoading(false);
+        return;
+      }
+    } catch (apiErr) {
+      console.warn('API error in customer RouteSearch, trying Supabase fallback:', apiErr.message);
+    }
+
+    // 2. Fallback to Supabase
     try {
       let req = supabase.from('routes').select('*');
       if (q) {
@@ -30,6 +46,7 @@ const RouteSearch = () => {
       setRoutes(data || []);
     } catch (err) {
       console.error('Error fetching routes:', err);
+      setRoutes([]);
     } finally {
       setLoading(false);
     }
@@ -41,8 +58,11 @@ const RouteSearch = () => {
   };
 
   const filteredRoutes = routes.filter(r => {
-    if (filter === 'electric') return r.route_number?.includes('EV') || r.name?.toLowerCase().includes('electric');
-    if (filter === 'express') return r.name?.toLowerCase().includes('express') || r.frequency?.includes('10');
+    const rNum = (r.routeNumber || r.route_number || '').toLowerCase();
+    const rName = (r.name || '').toLowerCase();
+    const rFreq = (r.frequency || '').toLowerCase();
+    if (filter === 'electric') return rNum.includes('ev') || rName.includes('electric') || rName.includes('ev');
+    if (filter === 'express') return rName.includes('express') || rFreq.includes('10');
     return true;
   });
 
@@ -50,14 +70,14 @@ const RouteSearch = () => {
     <div className="min-h-screen bg-background flex flex-col">
       <CustomerNavbar />
 
-      <main className="flex-1 max-w-[1440px] w-full mx-auto p-6 md:p-10 space-y-6">
+      <main className="flex-1 max-w-[1440px] w-full mx-auto p-4 sm:p-6 md:p-10 space-y-6">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl md:text-3xl font-black text-on-surface">
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-on-surface">
               {initialQuery ? `Route Results for "${initialQuery}"` : 'All Available Routes'}
             </h1>
-            <p className="text-body-sm text-on-surface-variant">
+            <p className="text-xs sm:text-sm text-on-surface-variant">
               Showing {filteredRoutes.length} matching transit routes
             </p>
           </div>
@@ -69,14 +89,14 @@ const RouteSearch = () => {
               placeholder="Search by route number, stop, or area..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="input-field flex-1"
+              className="input-field flex-1 text-xs sm:text-sm"
             />
-            <button type="submit" className="btn-primary">Search</button>
+            <button type="submit" className="btn-primary text-xs sm:text-sm px-4">Search</button>
           </form>
         </div>
 
         {/* Filter Pills */}
-        <div className="flex gap-2 border-b border-outline-variant/30 pb-4">
+        <div className="flex gap-2 border-b border-outline-variant/30 pb-4 overflow-x-auto">
           {[
             { id: 'all', label: 'All Routes' },
             { id: 'electric', label: '⚡ Electric Fleet' },
@@ -85,7 +105,7 @@ const RouteSearch = () => {
             <button
               key={f.id}
               onClick={() => setFilter(f.id)}
-              className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${
+              className={`px-4 py-2 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
                 filter === f.id
                   ? 'bg-primary text-on-primary shadow-sm'
                   : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
@@ -104,52 +124,59 @@ const RouteSearch = () => {
           </div>
         ) : filteredRoutes.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredRoutes.map(route => (
-              <div key={route.id} className="card p-6 border-l-4 border-primary hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
-                <div>
-                  <div className="flex justify-between items-start mb-3">
-                    <span className="px-3 py-1 bg-primary text-on-primary font-black rounded-lg text-lg">
-                      Route {route.route_number}
-                    </span>
-                    <span className="text-xs font-bold text-secondary bg-secondary/10 px-3 py-1 rounded-full">
-                      ₹{route.base_fare || 20} Base Fare
-                    </span>
-                  </div>
+            {filteredRoutes.map(route => {
+              const rId = route._id || route.id;
+              const rNum = route.routeNumber || route.route_number || 'Route';
+              const rFare = route.baseFare || route.base_fare || 20;
+              const rStops = route.stops || [];
 
-                  <h3 className="font-bold text-lg text-on-surface mb-1">{route.name}</h3>
-                  <p className="text-xs text-on-surface-variant mb-4">
-                    Operating: {route.start_time || '06:00'} - {route.end_time || '22:00'} · Frequency: {route.frequency || 'Every 15 mins'}
-                  </p>
+              return (
+                <div key={rId} className="card p-6 border-l-4 border-primary hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
+                  <div>
+                    <div className="flex justify-between items-start mb-3">
+                      <span className="px-3 py-1 bg-primary text-on-primary font-black rounded-lg text-lg">
+                        Route {rNum}
+                      </span>
+                      <span className="text-xs font-bold text-secondary bg-secondary/10 px-3 py-1 rounded-full">
+                        ₹{rFare} Base Fare
+                      </span>
+                    </div>
 
-                  {/* Stops list */}
-                  <div className="space-y-1 bg-surface-container-low p-3 rounded-lg text-xs">
-                    <p className="font-bold text-on-surface mb-1">Key Stops ({route.stops?.length || 0}):</p>
-                    <p className="text-on-surface-variant truncate">
-                      {route.stops?.join(' → ') || 'Central Station → Terminal'}
+                    <h3 className="font-bold text-lg text-on-surface mb-1">{route.name}</h3>
+                    <p className="text-xs text-on-surface-variant mb-4">
+                      Operating: {route.startTime || route.start_time || '06:00'} - {route.endTime || route.end_time || '22:00'} · Frequency: {route.frequency || 'Every 15 mins'}
                     </p>
+
+                    {/* Stops list */}
+                    <div className="space-y-1 bg-surface-container-low p-3 rounded-lg text-xs">
+                      <p className="font-bold text-on-surface mb-1">Key Stops ({rStops.length}):</p>
+                      <p className="text-on-surface-variant truncate">
+                        {rStops.join(' → ') || 'Central Station → Terminal'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 pt-3 border-t border-outline-variant/30">
+                    <SeatOccupancyBar current={Math.floor(Math.random() * 30) + 15} capacity={50} />
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => navigate(`/track?route=${rId}`)}
+                        className="btn-primary flex-1 py-2 text-xs flex items-center justify-center gap-1"
+                      >
+                        <span className="material-symbols-outlined text-sm">map</span> Track Live
+                      </button>
+                      <button
+                        onClick={() => navigate(`/customer/buy-pass?route=${rId}`)}
+                        className="btn-secondary flex-1 py-2 text-xs flex items-center justify-center gap-1"
+                      >
+                        <span className="material-symbols-outlined text-sm">confirmation_number</span> Buy Pass
+                      </button>
+                    </div>
                   </div>
                 </div>
-
-                <div className="space-y-3 pt-3 border-t border-outline-variant/30">
-                  <SeatOccupancyBar current={Math.floor(Math.random() * 30) + 15} capacity={50} />
-
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => navigate(`/track?route=${route.id}`)}
-                      className="btn-primary flex-1 py-2 text-xs flex items-center justify-center gap-1"
-                    >
-                      <span className="material-symbols-outlined text-sm">map</span> Track Live
-                    </button>
-                    <button
-                      onClick={() => navigate(`/customer/buy-pass?route=${route.id}`)}
-                      className="btn-secondary flex-1 py-2 text-xs flex items-center justify-center gap-1"
-                    >
-                      <span className="material-symbols-outlined text-sm">confirmation_number</span> Buy Pass
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="py-20 text-center card p-10 max-w-md mx-auto space-y-4">

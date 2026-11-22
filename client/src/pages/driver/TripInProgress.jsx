@@ -170,6 +170,23 @@ const TripInProgress = () => {
   const handleReportDelay = async (e) => {
     e.preventDefault();
     try {
+      // 1. Try local MongoDB API
+      try {
+        await api.post('/complaints', {
+          type: 'delay',
+          reason: delayReason,
+          description: `Driver Report: Delay due to ${delayReason}. ${delayNotes}`,
+          bus: trip?.bus?._id || trip?.bus?.id,
+          route: trip?.route?._id || trip?.route?.id
+        });
+        setShowDelayModal(false);
+        setDelayNotes('');
+        alert('Delay report submitted to control central.');
+        return;
+      } catch (apiErr) {
+        console.warn('API delay report fallback:', apiErr.message);
+      }
+
       await supabase.from('complaints').insert([{
         type: 'delay',
         reason: delayReason,

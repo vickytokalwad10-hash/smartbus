@@ -4,6 +4,7 @@ import TeacherNavbar from '../../components/TeacherNavbar';
 import PassStatusChip from '../../components/PassStatusChip';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../utils/supabaseClient';
+import api from '../../utils/api';
 
 const TeacherDashboard = () => {
   const { user } = useAuth();
@@ -16,12 +17,39 @@ const TeacherDashboard = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [routesRes, passesRes] = await Promise.all([
-          supabase.from('routes').select('*').limit(4),
-          user ? supabase.from('passes').select('*, route:routes(*)').eq('user_id', user.id).eq('status', 'active').order('created_at', { ascending: false }) : Promise.resolve({ data: [] })
-        ]);
-        setFrequentRoutes(routesRes.data || []);
-        setActivePass(passesRes.data?.[0] || null);
+        let loadedRoutes = [];
+        let loadedPass = null;
+
+        // 1. Try local MongoDB API
+        try {
+          const [rRes, pRes] = await Promise.all([
+            api.get('/routes'),
+            api.get('/passes/mine')
+          ]);
+          if (rRes.data && rRes.data.length > 0) loadedRoutes = rRes.data.slice(0, 4);
+          if (pRes.data && pRes.data.length > 0) {
+            loadedPass = pRes.data.find(p => p.status === 'active') || pRes.data[0];
+          }
+        } catch (apiErr) {
+          console.warn('API teacher dashboard fallback:', apiErr.message);
+        }
+
+        // 2. Try Supabase fallback if empty
+        if (loadedRoutes.length === 0 || !loadedPass) {
+          try {
+            const [routesRes, passesRes] = await Promise.all([
+              supabase.from('routes').select('*').limit(4),
+              user?.id ? supabase.from('passes').select('*, route:routes(*)').eq('user_id', user.id).eq('status', 'active').order('created_at', { ascending: false }) : Promise.resolve({ data: [] })
+            ]);
+            if (loadedRoutes.length === 0 && routesRes.data) loadedRoutes = routesRes.data;
+            if (!loadedPass && passesRes.data?.length > 0) loadedPass = passesRes.data[0];
+          } catch (sbErr) {
+            console.warn('Supabase teacher fallback:', sbErr.message);
+          }
+        }
+
+        setFrequentRoutes(loadedRoutes);
+        setActivePass(loadedPass);
       } catch (err) {
         console.error('Error fetching teacher dashboard data:', err);
       } finally {
@@ -140,14 +168,14 @@ const TeacherDashboard = () => {
               <div className="bg-gradient-to-r from-primary to-surface-tint rounded-xl p-6 text-on-primary flex flex-col sm:flex-row justify-between items-center gap-4 shadow-md">
                 <div className="space-y-2">
                   <span className="text-xs font-bold uppercase tracking-widest bg-white/20 px-3 py-1 rounded-full">
-                    {activePass.passType === 'teacher' ? 'Faculty Pass' : activePass.duration + ' Pass'} · {activePass.passId}
+                    {(activePass.passType || activePass.pass_type) === 'teacher' ? 'Faculty Pass' : activePass.duration + ' Pass'} · {activePass.passId || activePass.pass_id}
                   </span>
                   <h3 className="text-2xl font-black">{activePass.route?.name || 'JD College Campus Express'}</h3>
                   <p className="text-xs opacity-80">
-                    Stops: {activePass.boardingPoint} → {activePass.destinationStop}
+                    Stops: {activePass.boardingPoint || activePass.boarding_point || 'Sitabuldi'} → {activePass.destinationStop || activePass.destination_stop || 'JD College Main Gate'}
                   </p>
                   <p className="text-xs font-semibold mt-2">
-                    Valid until: {new Date(activePass.validUntil).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    Valid until: {new Date(activePass.validUntil || activePass.valid_until).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
                   </p>
                 </div>
 
@@ -182,11 +210,11 @@ const TeacherDashboard = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {frequentRoutes.map(route => (
-              <div key={route._id} className="card p-5 hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
+              <div key={route._id || route.id} className="card p-5 hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
                     <span className="px-3 py-1 bg-primary text-on-primary font-black rounded-lg text-sm">
-                      Route {route.routeNumber}
+                      Route {route.routeNumber || route.route_number}
                     </span>
                     <span className="text-xs text-secondary font-bold flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-secondary"></span> Active
@@ -199,8 +227,8 @@ const TeacherDashboard = () => {
                 </div>
 
                 <div className="pt-3 border-t border-outline-variant/30 flex items-center justify-between">
-                  <span className="text-sm font-black text-primary">₹{route.baseFare || 20}</span>
-                  <button onClick={() => navigate(`/track?route=${route._id}`)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1">
+                  <span className="text-sm font-black text-primary">₹{route.baseFare || route.base_fare || 20}</span>
+                  <button onClick={() => navigate(`/track?route=${route._id || route.id}`)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1">
                     Track Live <span className="material-symbols-outlined text-sm">arrow_forward</span>
                   </button>
                 </div>

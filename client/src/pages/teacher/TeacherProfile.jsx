@@ -4,6 +4,7 @@ import PassStatusChip from '../../components/PassStatusChip';
 import QRCodeCard from '../../components/QRCodeCard';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../utils/supabaseClient';
+import api from '../../utils/api';
 
 const TeacherProfile = () => {
   const { user } = useAuth();
@@ -27,15 +28,39 @@ const TeacherProfile = () => {
     if (!user) return;
     setLoading(true);
     try {
-      const [pRes, payRes, compRes] = await Promise.all([
-        supabase.from('passes').select('*, route:routes(*)').eq('user_id', user.id).order('created_at', { ascending: false }),
-        supabase.from('payments').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
-        supabase.from('complaints').select('*').eq('user_id', user.id).order('created_at', { ascending: false })
-      ]);
-      setPasses(pRes.data || []);
-      setPayments(payRes.data || []);
-      setComplaints(compRes.data || []);
-      if (pRes.data?.length > 0) setSelectedPass(pRes.data[0]);
+      let pList = [], payList = [], compList = [];
+      // 1. Try local MongoDB API
+      try {
+        const [pRes, payRes, compRes] = await Promise.all([
+          api.get('/passes/mine'),
+          api.get('/payments/mine'),
+          api.get('/complaints/mine')
+        ]);
+        if (pRes.data) pList = pRes.data;
+        if (payRes.data) payList = payRes.data;
+        if (compRes.data) compList = compRes.data;
+      } catch (apiErr) {
+        console.warn('API teacher profile fallback:', apiErr.message);
+      }
+
+      // 2. Try Supabase fallback if empty
+      if (pList.length === 0 || payList.length === 0 || compList.length === 0) {
+        try {
+          const [pRes, payRes, compRes] = await Promise.all([
+            supabase.from('passes').select('*, route:routes(*)').eq('user_id', user.id).order('created_at', { ascending: false }),
+            supabase.from('payments').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+            supabase.from('complaints').select('*').eq('user_id', user.id).order('created_at', { ascending: false })
+          ]);
+          if (pList.length === 0 && pRes.data) pList = pRes.data;
+          if (payList.length === 0 && payRes.data) payList = payRes.data;
+          if (compList.length === 0 && compRes.data) compList = compRes.data;
+        } catch (sbErr) {}
+      }
+
+      setPasses(pList);
+      setPayments(payList);
+      setComplaints(compList);
+      if (pList.length > 0) setSelectedPass(pList[0]);
     } catch (err) {
       console.error('Error fetching teacher profile data:', err);
     } finally {
@@ -47,6 +72,17 @@ const TeacherProfile = () => {
     e.preventDefault();
     if (!complaintText.trim() || !user) return;
     try {
+      // 1. Try local MongoDB API
+      try {
+        await api.post('/complaints', { type: complaintType, description: complaintText });
+        setComplaintText('');
+        setShowModal(false);
+        fetchData();
+        return;
+      } catch (apiErr) {
+        console.warn('API complaint post fallback:', apiErr.message);
+      }
+
       await supabase.from('complaints').insert([{ type: complaintType, description: complaintText, user_id: user.id }]);
       setComplaintText('');
       setShowModal(false);
@@ -130,34 +166,38 @@ const TeacherProfile = () => {
                 <div className="py-12 text-center text-xs text-on-surface-variant">Loading passes...</div>
               ) : passes.length > 0 ? (
                 <div className="space-y-4">
-                  {passes.map(p => (
-                    <div
-                      key={p.id}
-                      onClick={() => setSelectedPass(p)}
-                      className={`card p-5 cursor-pointer border-2 transition-all flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 ${
-                        selectedPass?.id === p.id ? 'border-primary bg-primary/5' : 'hover:border-outline-variant'
-                      }`}
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-black text-primary text-lg">{p.pass_id}</span>
-                          <PassStatusChip status={p.status} />
+                  {passes.map(p => {
+                    const pKey = p._id || p.id || p.passId || p.pass_id;
+                    const isSel = (selectedPass?._id || selectedPass?.id || selectedPass?.passId) === pKey;
+                    return (
+                      <div
+                        key={pKey}
+                        onClick={() => setSelectedPass(p)}
+                        className={`card p-5 cursor-pointer border-2 transition-all flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 ${
+                          isSel ? 'border-primary bg-primary/5' : 'hover:border-outline-variant'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-black text-primary text-lg">{p.passId || p.pass_id}</span>
+                            <PassStatusChip status={p.status} />
+                          </div>
+                          <p className="text-sm font-bold text-on-surface">{p.route?.name || 'JD College Campus Express'}</p>
+                          <p className="text-xs text-on-surface-variant">
+                            Stops: {p.boardingPoint || p.boarding_point || 'Sitabuldi'} → {p.destinationStop || p.destination_stop || 'JD College Main Gate'}
+                          </p>
+                          <p className="text-xs text-on-surface-variant">
+                            Valid: {new Date(p.validFrom || p.created_at || Date.now()).toLocaleDateString()} to {new Date(p.validUntil || p.valid_until || Date.now()).toLocaleDateString()}
+                          </p>
                         </div>
-                        <p className="text-sm font-bold text-on-surface">{p.route?.name || 'JD College Campus Express'}</p>
-                        <p className="text-xs text-on-surface-variant">
-                          Stops: {p.boarding_point} → {p.destination_stop}
-                        </p>
-                        <p className="text-xs text-on-surface-variant">
-                          Valid: {new Date(p.created_at).toLocaleDateString()} to {new Date(p.valid_until).toLocaleDateString()}
-                        </p>
-                      </div>
 
-                      <div className="text-right space-y-1">
-                        <p className="text-lg font-black text-on-surface">₹{p.amount}</p>
-                        <span className="text-xs font-bold text-primary block">Click to view QR</span>
+                        <div className="text-right space-y-1">
+                          <p className="text-lg font-black text-on-surface">₹{p.amount}</p>
+                          <span className="text-xs font-bold text-primary block">Click to view QR</span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="card p-10 text-center text-xs text-on-surface-variant">No faculty passes found.</div>
@@ -184,10 +224,10 @@ const TeacherProfile = () => {
                 </thead>
                 <tbody>
                   {payments.map(pay => (
-                    <tr key={pay.id}>
-                      <td>{new Date(pay.created_at).toLocaleString()}</td>
-                      <td className="font-mono text-xs">{pay.id.substr(0,8)}</td>
-                      <td>{pay.description}</td>
+                    <tr key={pay._id || pay.id || pay.transactionId}>
+                      <td>{new Date(pay.createdAt || pay.created_at).toLocaleString()}</td>
+                      <td className="font-mono text-xs">{pay.transactionId || (pay._id || pay.id || '').substr(0,8)}</td>
+                      <td>{pay.description || 'Pass Payment'}</td>
                       <td>{pay.method}</td>
                       <td className="font-bold text-primary">₹{pay.amount}</td>
                       <td>

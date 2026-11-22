@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import TeacherNavbar from '../../components/TeacherNavbar';
 import SeatOccupancyBar from '../../components/SeatOccupancyBar';
 import { supabase } from '../../utils/supabaseClient';
+import api from '../../utils/api';
 
 const RouteSearch = () => {
   const navigate = useNavigate();
@@ -21,14 +22,26 @@ const RouteSearch = () => {
   const fetchRoutes = async (q) => {
     setLoading(true);
     try {
+      // 1. Try local MongoDB API
+      try {
+        const url = q ? `/routes/search?query=${encodeURIComponent(q)}` : '/routes';
+        const res = await api.get(url);
+        if (res.data && res.data.length > 0) {
+          setRoutes(res.data);
+          setLoading(false);
+          return;
+        }
+      } catch (apiErr) {
+        console.warn('API routes search fallback:', apiErr.message);
+      }
+
+      // 2. Try Supabase fallback
       let req = supabase.from('routes').select('*');
       if (q) {
         req = req.or(`route_number.ilike.%${q}%,name.ilike.%${q}%`);
       }
       const { data, error } = await req;
       if (error) throw error;
-      
-      // Also fetch stops to search if needed, but ilike covers basics
       setRoutes(data || []);
     } catch (err) {
       console.error('Error fetching routes:', err);
@@ -43,8 +56,11 @@ const RouteSearch = () => {
   };
 
   const filteredRoutes = routes.filter(r => {
-    if (filter === 'electric') return r.route_number?.includes('EV') || r.name?.toLowerCase().includes('electric') || r.name?.toLowerCase().includes('eco');
-    if (filter === 'express') return r.name?.toLowerCase().includes('express') || r.frequency?.includes('10');
+    const num = r.routeNumber || r.route_number || '';
+    const nm = (r.name || '').toLowerCase();
+    const freq = r.frequency || '';
+    if (filter === 'electric') return num.includes('EV') || nm.includes('electric') || nm.includes('eco');
+    if (filter === 'express') return nm.includes('express') || freq.includes('10');
     return true;
   });
 
@@ -106,52 +122,55 @@ const RouteSearch = () => {
           </div>
         ) : filteredRoutes.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredRoutes.map(route => (
-              <div key={route.id} className="card p-6 border-l-4 border-primary hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
-                <div>
-                  <div className="flex justify-between items-start mb-3">
-                    <span className="px-3 py-1 bg-primary text-on-primary font-black rounded-lg text-lg">
-                      Route {route.route_number}
-                    </span>
-                    <span className="text-xs font-bold text-secondary bg-secondary/10 px-3 py-1 rounded-full">
-                      ₹{route.base_fare || 20} Base Fare
-                    </span>
-                  </div>
+            {filteredRoutes.map(route => {
+              const rId = route._id || route.id;
+              return (
+                <div key={rId} className="card p-6 border-l-4 border-primary hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
+                  <div>
+                    <div className="flex justify-between items-start mb-3">
+                      <span className="px-3 py-1 bg-primary text-on-primary font-black rounded-lg text-lg">
+                        Route {route.routeNumber || route.route_number}
+                      </span>
+                      <span className="text-xs font-bold text-secondary bg-secondary/10 px-3 py-1 rounded-full">
+                        ₹{route.baseFare || route.base_fare || 20} Base Fare
+                      </span>
+                    </div>
 
-                  <h3 className="font-bold text-lg text-on-surface mb-1 truncate">{route.name}</h3>
-                  <p className="text-xs text-on-surface-variant mb-4">
-                    Operating: {route.start_time || '06:00'} - {route.end_time || '22:00'} · Frequency: {route.frequency || 'Every 15 mins'}
-                  </p>
-
-                  {/* Stops list */}
-                  <div className="space-y-1 bg-surface-container-low p-3 rounded-lg text-xs">
-                    <p className="font-bold text-on-surface mb-1">Key Stops ({route.stops?.length || 0}):</p>
-                    <p className="text-on-surface-variant truncate">
-                      {route.stops?.map(s => s.name).join(' → ') || 'Sitabuldi → JD College'}
+                    <h3 className="font-bold text-lg text-on-surface mb-1 truncate">{route.name}</h3>
+                    <p className="text-xs text-on-surface-variant mb-4">
+                      Operating: {route.startTime || route.start_time || '06:00'} - {route.endTime || route.end_time || '22:00'} · Frequency: {route.frequency || 'Every 15 mins'}
                     </p>
+
+                    {/* Stops list */}
+                    <div className="space-y-1 bg-surface-container-low p-3 rounded-lg text-xs">
+                      <p className="font-bold text-on-surface mb-1">Key Stops ({route.stops?.length || 0}):</p>
+                      <p className="text-on-surface-variant truncate">
+                        {route.stops?.map(s => s.name).join(' → ') || 'Sitabuldi → JD College'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 pt-3 border-t border-outline-variant/30">
+                    <SeatOccupancyBar current={Math.floor(Math.random() * 30) + 15} capacity={50} />
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => navigate(`/track?route=${rId}`)}
+                        className="btn-primary flex-1 py-2 text-xs flex items-center justify-center gap-1"
+                      >
+                        <span className="material-symbols-outlined text-sm">map</span> Track Live
+                      </button>
+                      <button
+                        onClick={() => navigate(`/teacher/buy-pass?route=${rId}`)}
+                        className="btn-secondary flex-1 py-2 text-xs flex items-center justify-center gap-1"
+                      >
+                        <span className="material-symbols-outlined text-sm">confirmation_number</span> Faculty Pass
+                      </button>
+                    </div>
                   </div>
                 </div>
-
-                <div className="space-y-3 pt-3 border-t border-outline-variant/30">
-                  <SeatOccupancyBar current={Math.floor(Math.random() * 30) + 15} capacity={50} />
-
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => navigate(`/track?route=${route.id}`)}
-                      className="btn-primary flex-1 py-2 text-xs flex items-center justify-center gap-1"
-                    >
-                      <span className="material-symbols-outlined text-sm">map</span> Track Live
-                    </button>
-                    <button
-                      onClick={() => navigate(`/teacher/buy-pass?route=${route.id}`)}
-                      className="btn-secondary flex-1 py-2 text-xs flex items-center justify-center gap-1"
-                    >
-                      <span className="material-symbols-outlined text-sm">confirmation_number</span> Faculty Pass
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="py-20 text-center card p-10 max-w-md mx-auto space-y-4">

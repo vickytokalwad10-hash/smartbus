@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import StudentSidebar from '../../components/StudentSidebar';
 import { supabase } from '../../utils/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import api from '../../utils/api';
 
 const STATUS_CHIP = {
   success: 'bg-secondary-container text-secondary',
@@ -57,6 +58,29 @@ export default function StudentPayments() {
     const fetchPayments = async () => {
       if (!user) return;
       try {
+        // 1. Try local MongoDB API
+        try {
+          const res = await api.get('/payments/mine');
+          if (res.data && res.data.length > 0) {
+            const formatted = res.data.map(p => ({
+              id: p._id || p.transactionId,
+              transactionId: p.transactionId,
+              created_at: p.createdAt,
+              description: p.description || `${p.pass?.duration || 'Monthly'} Pass Purchase`,
+              route: p.route?.name || p.route?.routeNumber || 'Route 42A',
+              amount: p.amount,
+              method: p.method,
+              status: p.status
+            }));
+            setPayments(formatted);
+            setLoading(false);
+            return;
+          }
+        } catch (apiErr) {
+          console.warn('API payments fallback:', apiErr.message);
+        }
+
+        // 2. Try Supabase
         const { data, error } = await supabase.from('payments').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
         if (error) throw error;
         const list = Array.isArray(data) ? data : [];

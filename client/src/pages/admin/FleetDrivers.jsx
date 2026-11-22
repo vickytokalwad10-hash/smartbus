@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import AdminSidebar from '../../components/AdminSidebar';
 import SeatOccupancyBar from '../../components/SeatOccupancyBar';
 import { supabase } from '../../utils/supabaseClient';
+import api from '../../utils/api';
 
 const FleetDrivers = () => {
   const [tab, setTab] = useState('buses'); // 'buses' | 'drivers'
@@ -21,14 +22,39 @@ const FleetDrivers = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [bRes, dRes, rRes] = await Promise.all([
-        supabase.from('buses').select('*, route:routes(*)'),
-        supabase.from('profiles').select('*').eq('role', 'driver'),
-        supabase.from('routes').select('*')
-      ]);
-      setBuses(bRes.data || []);
-      setDrivers(dRes.data || []);
-      setRoutes(rRes.data || []);
+      let bList = [], dList = [], rList = [];
+
+      // 1. Try local MongoDB API
+      try {
+        const [bRes, dRes, rRes] = await Promise.all([
+          api.get('/buses'),
+          api.get('/users?role=driver'),
+          api.get('/routes')
+        ]);
+        if (bRes.data) bList = bRes.data;
+        if (dRes.data) dList = dRes.data;
+        if (rRes.data) rList = rRes.data;
+      } catch (apiErr) {
+        console.warn('API fleet/drivers fallback:', apiErr.message);
+      }
+
+      // 2. Try Supabase fallback
+      if (bList.length === 0 || dList.length === 0) {
+        try {
+          const [bRes, dRes, rRes] = await Promise.all([
+            supabase.from('buses').select('*, route:routes(*)'),
+            supabase.from('profiles').select('*').eq('role', 'driver'),
+            supabase.from('routes').select('*')
+          ]);
+          if (bList.length === 0 && bRes.data) bList = bRes.data;
+          if (dList.length === 0 && dRes.data) dList = dRes.data;
+          if (rList.length === 0 && rRes.data) rList = rRes.data;
+        } catch (sbErr) {}
+      }
+
+      setBuses(bList);
+      setDrivers(dList);
+      setRoutes(rList);
     } catch (err) {
       console.error(err);
     } finally {
@@ -39,6 +65,23 @@ const FleetDrivers = () => {
   const handleCreateBus = async (e) => {
     e.preventDefault();
     try {
+      // 1. Try local MongoDB API
+      try {
+        await api.post('/buses', {
+          busNumber: busForm.busNumber,
+          registrationPlate: busForm.registrationPlate || busForm.busNumber,
+          capacity: Number(busForm.capacity),
+          type: busForm.type,
+          route: busForm.route || null
+        });
+        setShowBusModal(false);
+        setBusForm({ busNumber: '', registrationPlate: '', capacity: 50, type: 'Diesel', route: '' });
+        fetchData();
+        return;
+      } catch (apiErr) {
+        console.warn('API create bus fallback:', apiErr.message);
+      }
+
       await supabase.from('buses').insert([{
         bus_number: busForm.busNumber,
         registration_plate: busForm.registrationPlate || busForm.busNumber,
@@ -96,7 +139,7 @@ const FleetDrivers = () => {
           {tab === 'buses' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {buses.map(bus => (
-                <div key={bus.id} className="card p-5 space-y-4 border-l-4 border-primary">
+                <div key={bus._id || bus.id} className="card p-5 space-y-4 border-l-4 border-primary">
                   <div className="flex justify-between items-start">
                     <div>
                       <span className="px-2.5 py-1 bg-surface-container font-black text-xs rounded text-primary">
@@ -145,7 +188,7 @@ const FleetDrivers = () => {
                   </thead>
                   <tbody>
                     {drivers.map(d => (
-                      <tr key={d.id}>
+                      <tr key={d._id || d.id}>
                         <td className="font-bold">{d.name}</td>
                         <td className="font-mono text-xs text-primary">{d.employee_id || d.employeeId || 'DRV-001'}</td>
                         <td>{d.email}</td>
@@ -216,7 +259,7 @@ const FleetDrivers = () => {
                 >
                   <option value="">Select Route</option>
                   {routes.map(r => (
-                    <option key={r.id} value={r.id}>Route {r.route_number || r.routeNumber} — {r.name}</option>
+                    <option key={r._id || r.id} value={r._id || r.id}>Route {r.routeNumber || r.route_number} — {r.name}</option>
                   ))}
                 </select>
               </div>

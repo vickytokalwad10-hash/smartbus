@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import AdminSidebar from '../../components/AdminSidebar';
 import { supabase } from '../../utils/supabaseClient';
+import api from '../../utils/api';
 
 const RouteManagement = () => {
   const [routes, setRoutes] = useState([]);
@@ -28,6 +29,19 @@ const RouteManagement = () => {
   const fetchRoutes = async () => {
     setLoading(true);
     try {
+      // 1. Try local MongoDB API
+      try {
+        const res = await api.get('/routes');
+        if (res.data && res.data.length > 0) {
+          setRoutes(res.data);
+          setLoading(false);
+          return;
+        }
+      } catch (apiErr) {
+        console.warn('API routes fallback:', apiErr.message);
+      }
+
+      // 2. Try Supabase
       const { data, error } = await supabase.from('routes').select('*').order('created_at', { ascending: true });
       if (error) console.error(error);
       setRoutes(data || []);
@@ -74,7 +88,33 @@ const RouteManagement = () => {
   const handleSaveRoute = async (e) => {
     e.preventDefault();
     try {
-      const payload = {
+      const mongoPayload = {
+        routeNumber: form.routeNumber,
+        name: form.name,
+        frequency: form.frequency,
+        startTime: form.startTime,
+        endTime: form.endTime,
+        baseFare: form.baseFare,
+        stops: form.stops
+      };
+
+      // 1. Try local MongoDB API
+      try {
+        if (editingRoute) {
+          const rId = editingRoute._id || editingRoute.id;
+          await api.put(`/routes/${rId}`, mongoPayload);
+        } else {
+          await api.post('/routes', mongoPayload);
+        }
+        setShowModal(false);
+        fetchRoutes();
+        return;
+      } catch (apiErr) {
+        console.warn('API save route fallback:', apiErr.message);
+      }
+
+      // 2. Supabase fallback
+      const sbPayload = {
         route_number: form.routeNumber,
         name: form.name,
         frequency: form.frequency,
@@ -84,9 +124,9 @@ const RouteManagement = () => {
         stops: form.stops
       };
       if (editingRoute) {
-        await supabase.from('routes').update(payload).eq('id', editingRoute.id);
+        await supabase.from('routes').update(sbPayload).eq('id', editingRoute.id);
       } else {
-        await supabase.from('routes').insert([payload]);
+        await supabase.from('routes').insert([sbPayload]);
       }
       setShowModal(false);
       fetchRoutes();
@@ -98,6 +138,15 @@ const RouteManagement = () => {
   const handleDeleteRoute = async (id) => {
     if (!window.confirm('Are you sure you want to delete this route?')) return;
     try {
+      // 1. Try local MongoDB API
+      try {
+        await api.delete(`/routes/${id}`);
+        fetchRoutes();
+        return;
+      } catch (apiErr) {
+        console.warn('API delete route fallback:', apiErr.message);
+      }
+
       await supabase.from('routes').delete().eq('id', id);
       fetchRoutes();
     } catch (err) {
@@ -161,24 +210,27 @@ const RouteManagement = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {routes.map(r => (
-                    <tr key={r.id}>
-                      <td className="font-black text-primary">Route {r.route_number || r.routeNumber}</td>
-                      <td className="font-bold">{r.name}</td>
-                      <td>{r.stops?.length || 0} stops</td>
-                      <td>{r.frequency || 'Every 15 mins'}</td>
-                      <td>{r.start_time || r.startTime || '06:00'} - {r.end_time || r.endTime || '22:00'}</td>
-                      <td className="font-bold text-secondary">₹{r.base_fare || r.baseFare || 20}</td>
-                      <td className="space-x-2">
-                        <button onClick={() => handleOpenEdit(r)} className="px-3 py-1 bg-primary/10 text-primary rounded font-bold text-xs hover:bg-primary/20">
-                          Edit
-                        </button>
-                        <button onClick={() => handleDeleteRoute(r.id)} className="px-3 py-1 bg-error/10 text-error rounded font-bold text-xs hover:bg-error/20">
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {routes.map(r => {
+                    const rId = r._id || r.id;
+                    return (
+                      <tr key={rId}>
+                        <td className="font-black text-primary">Route {r.routeNumber || r.route_number}</td>
+                        <td className="font-bold">{r.name}</td>
+                        <td>{r.stops?.length || 0} stops</td>
+                        <td>{r.frequency || 'Every 15 mins'}</td>
+                        <td>{r.startTime || r.start_time || '06:00'} - {r.endTime || r.end_time || '22:00'}</td>
+                        <td className="font-bold text-secondary">₹{r.baseFare || r.base_fare || 20}</td>
+                        <td className="space-x-2">
+                          <button onClick={() => handleOpenEdit(r)} className="px-3 py-1 bg-primary/10 text-primary rounded font-bold text-xs hover:bg-primary/20">
+                            Edit
+                          </button>
+                          <button onClick={() => handleDeleteRoute(rId)} className="px-3 py-1 bg-error/10 text-error rounded font-bold text-xs hover:bg-error/20">
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import AdminSidebar from '../../components/AdminSidebar';
+import api from '../../utils/api';
 import { supabase } from '../../utils/supabaseClient';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
@@ -8,19 +9,34 @@ const AIPredictions = () => {
   const [selectedRoute, setSelectedRoute] = useState('');
   const [predictionData, setPredictionData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [appliedRecs, setAppliedRecs] = useState({});
 
   useEffect(() => {
-    supabase.from('routes').select('*').then(({ data, error }) => {
-      if (error) {
-        console.error(error);
+    fetchRoutes();
+  }, []);
+
+  const fetchRoutes = async () => {
+    try {
+      const res = await api.get('/routes');
+      if (Array.isArray(res.data) && res.data.length > 0) {
+        setRoutes(res.data);
+        setSelectedRoute(res.data[0]._id || res.data[0].id);
         return;
       }
-      setRoutes(data || []);
-      if (data?.length > 0) {
-        setSelectedRoute(data[0].id);
+    } catch (apiErr) {
+      console.warn('API routes error in AIPredictions, trying Supabase:', apiErr.message);
+    }
+
+    try {
+      const { data, error } = await supabase.from('routes').select('*');
+      if (!error && data?.length > 0) {
+        setRoutes(data);
+        setSelectedRoute(data[0]._id || data[0].id);
       }
-    });
-  }, []);
+    } catch (err) {
+      console.error('Failed to load routes in AIPredictions:', err);
+    }
+  };
 
   useEffect(() => {
     if (selectedRoute) {
@@ -31,18 +47,20 @@ const AIPredictions = () => {
   const fetchPredictions = async (routeId) => {
     setLoading(true);
     try {
-      // 1. Fetch historical trips for this route to calculate predictions
-      const { data: trips, error } = await supabase
-        .from('trips')
-        .select('date, hour_of_day, passenger_count')
-        .eq('route_id', routeId)
-        .eq('status', 'completed');
-        
-      if (error) throw error;
-      
-      // Basic AI logic: Group by day of week and hour to find average ridership
-      // Since it's a demo, if no trips exist, we use a fallback mock pattern
-      
+      let trips = [];
+      try {
+        const res = await api.get(`/trips?routeId=${routeId}`);
+        if (Array.isArray(res.data)) trips = res.data;
+      } catch (e) {
+        // Fallback to Supabase if available
+        const { data } = await supabase
+          .from('trips')
+          .select('date, hour_of_day, passenger_count')
+          .eq('route_id', routeId)
+          .eq('status', 'completed');
+        if (data) trips = data;
+      }
+
       const chartData = [
         { date: 'Mon', actual: 420, predicted: 450 },
         { date: 'Tue', actual: 480, predicted: 470 },
@@ -52,11 +70,10 @@ const AIPredictions = () => {
         { date: 'Sat', actual: 300, predicted: 320 },
         { date: 'Sun', actual: 240, predicted: 250 },
       ];
-      
+
       if (trips && trips.length > 0) {
-        // Simple heuristic: adjust predicted based on historical variance
-        const avg = trips.reduce((sum, t) => sum + (t.passenger_count || 0), 0) / trips.length;
-        chartData[0].predicted = Math.round(avg * 1.1); // just a demo heuristic
+        const avg = trips.reduce((sum, t) => sum + (t.passengerCount || t.passenger_count || 30), 0) / trips.length;
+        chartData[0].predicted = Math.round(avg * 1.1);
       }
 
       setPredictionData({ chartData });
@@ -65,6 +82,13 @@ const AIPredictions = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleApplyRec = (idx, title) => {
+    setAppliedRecs(prev => ({ ...prev, [idx]: true }));
+    setTimeout(() => {
+      alert(`Recommendation applied: "${title}". Fleet dispatch updated.`);
+    }, 100);
   };
 
   // Mock heatmap grid data: 5 stops x 17 hours (6AM - 10PM)
@@ -77,6 +101,9 @@ const AIPredictions = () => {
     if (hour >= 12 && hour <= 14) return 0.55;
     return 0.25;
   };
+
+  const currentRouteObj = routes.find(r => (r._id || r.id) === selectedRoute);
+  const routeDisplayName = currentRouteObj ? (currentRouteObj.routeNumber || currentRouteObj.route_number || currentRouteObj.name) : '';
 
   return (
     <div className="flex bg-background min-h-screen">
@@ -98,9 +125,15 @@ const AIPredictions = () => {
               onChange={(e) => setSelectedRoute(e.target.value)}
               className="input-field text-xs py-1.5 px-3 w-full sm:w-56"
             >
-              {routes.map(r => (
-                <option key={r._id} value={r._id}>Route {r.routeNumber} — {r.name}</option>
-              ))}
+              {routes.map(r => {
+                const rId = r._id || r.id;
+                const rNum = r.routeNumber || r.route_number || 'Route';
+                return (
+                  <option key={rId} value={rId}>
+                    Route {rNum} — {r.name}
+                  </option>
+                );
+              })}
             </select>
           </div>
         </header>
@@ -112,7 +145,7 @@ const AIPredictions = () => {
             <div className="flex justify-between items-center">
               <div>
                 <h2 className="text-base font-bold">Predicted vs Actual Hourly Passenger Demand</h2>
-                <p className="text-xs text-on-surface-variant">7-Day rolling demand forecast for Route {routes.find(r => r._id === selectedRoute)?.routeNumber || ''}</p>
+                <p className="text-xs text-on-surface-variant">7-Day rolling demand forecast for Route {routeDisplayName}</p>
               </div>
 
               <div className="flex gap-4 text-xs font-bold">
@@ -226,8 +259,15 @@ const AIPredictions = () => {
                   </div>
                   <h3 className="font-bold text-sm text-on-surface">{rec.title}</h3>
                   <p className="text-xs text-on-surface-variant leading-relaxed">{rec.desc}</p>
-                  <button onClick={() => alert(`Recommendation applied: ${rec.title}`)} className="btn-primary w-full py-2 text-xs">
-                    Apply AI Recommendation
+                  <button 
+                    onClick={() => handleApplyRec(idx, rec.title)} 
+                    className={`w-full py-2 text-xs font-bold rounded-lg transition-all ${
+                      appliedRecs[idx] 
+                        ? 'bg-secondary text-white' 
+                        : 'btn-primary'
+                    }`}
+                  >
+                    {appliedRecs[idx] ? '✓ Recommendation Applied' : 'Apply AI Recommendation'}
                   </button>
                 </div>
               ))}

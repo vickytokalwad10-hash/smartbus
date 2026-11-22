@@ -3,6 +3,7 @@ import AdminSidebar from '../../components/AdminSidebar';
 import MapView from '../../components/MapView';
 import SeatOccupancyBar from '../../components/SeatOccupancyBar';
 import { supabase } from '../../utils/supabaseClient';
+import api from '../../utils/api';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
 const AdminDashboard = () => {
@@ -24,26 +25,55 @@ const AdminDashboard = () => {
   useEffect(() => {
     fetchDashboardData();
 
-    const channel = supabase.channel('admin_dashboard')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'complaints' }, fetchDashboardData)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'buses' }, fetchDashboardData)
-      .subscribe();
+    try {
+      const channel = supabase.channel('admin_dashboard')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'complaints' }, fetchDashboardData)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'buses' }, fetchDashboardData)
+        .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+      return () => {
+        supabase.removeChannel(channel).catch(() => {});
+      };
+    } catch (e) {}
   }, []);
 
   const fetchDashboardData = async () => {
     try {
-      const [bRes, cRes, pRes] = await Promise.all([
-        supabase.from('buses').select('*, route:routes(route_number), driver:profiles(name)'),
-        supabase.from('complaints').select('*').order('created_at', { ascending: false }).limit(20),
-        supabase.from('passes').select('id', { count: 'exact' }).eq('status', 'active')
-      ]);
-      if (bRes.data) setBuses(bRes.data);
-      if (cRes.data) setComplaints(cRes.data);
-      if (pRes.count !== null) setStats(prev => ({ ...prev, activePasses: pRes.count }));
+      let bData = [], cData = [], activePassCount = null;
+
+      // 1. Try local MongoDB API
+      try {
+        const [bRes, cRes, pRes] = await Promise.all([
+          api.get('/buses'),
+          api.get('/complaints'),
+          api.get('/passes?status=active')
+        ]);
+        if (bRes.data) bData = bRes.data;
+        if (cRes.data) cData = cRes.data;
+        if (pRes.data) activePassCount = pRes.data.length;
+      } catch (apiErr) {
+        console.warn('API admin dashboard fallback:', apiErr.message);
+      }
+
+      // 2. Try Supabase fallback
+      if (bData.length === 0 || cData.length === 0) {
+        try {
+          const [bRes, cRes, pRes] = await Promise.all([
+            supabase.from('buses').select('*, route:routes(route_number), driver:profiles(name)'),
+            supabase.from('complaints').select('*').order('created_at', { ascending: false }).limit(20),
+            supabase.from('passes').select('id', { count: 'exact' }).eq('status', 'active')
+          ]);
+          if (bData.length === 0 && bRes.data) bData = bRes.data;
+          if (cData.length === 0 && cRes.data) cData = cRes.data;
+          if (activePassCount === null && pRes.count !== null) activePassCount = pRes.count;
+        } catch (sbErr) {}
+      }
+
+      setBuses(bData);
+      setComplaints(cData);
+      if (activePassCount !== null) {
+        setStats(prev => ({ ...prev, activePasses: activePassCount, busesInService: bData.length }));
+      }
     } catch (err) {
       console.error('Error loading admin dashboard:', err);
     } finally {
@@ -53,6 +83,15 @@ const AdminDashboard = () => {
 
   const handleResolveAlert = async (id) => {
     try {
+      // 1. Try local MongoDB API
+      try {
+        await api.patch(`/complaints/${id}`, { status: 'resolved' });
+        fetchDashboardData();
+        return;
+      } catch (apiErr) {
+        console.warn('API resolve alert fallback:', apiErr.message);
+      }
+
       await supabase.from('complaints').update({ status: 'resolved', resolved_at: new Date() }).eq('id', id);
       fetchDashboardData();
     } catch (err) {
@@ -61,14 +100,14 @@ const AdminDashboard = () => {
   };
 
   const mapBuses = buses.map(b => ({
-    busId: b.id,
-    busNumber: b.bus_number,
-    lat: b.last_location?.lat || (21.1458 + (Math.random() - 0.5) * 0.04), // Nagpur center
-    lng: b.last_location?.lng || (79.0882 + (Math.random() - 0.5) * 0.04),
-    current: b.current_occupancy || 25,
+    busId: b._id || b.id,
+    busNumber: b.busNumber || b.bus_number,
+    lat: b.lastLocation?.lat || b.last_location?.lat || (21.1458 + (Math.random() - 0.5) * 0.04), // Nagpur center
+    lng: b.lastLocation?.lng || b.last_location?.lng || (79.0882 + (Math.random() - 0.5) * 0.04),
+    current: b.currentOccupancy || b.current_occupancy || 25,
     capacity: b.capacity || 50,
     driver: b.driver?.name,
-    route: b.route?.route_number
+    route: b.route?.routeNumber || b.route?.route_number
   }));
 
   return (
@@ -162,23 +201,26 @@ const AdminDashboard = () => {
                 </div>
 
                 <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
-                  {complaints.map(c => (
-                    <div key={c.id} className="p-3 bg-surface-container-low rounded-xl border-l-4 border-error space-y-1">
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-bold text-error uppercase">{c.type || 'Incident'}</span>
-                        <span className="text-[10px] text-on-surface-variant">{new Date(c.created_at).toLocaleTimeString()}</span>
+                  {complaints.map(c => {
+                    const cId = c._id || c.id;
+                    return (
+                      <div key={cId} className="p-3 bg-surface-container-low rounded-xl border-l-4 border-error space-y-1">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-bold text-error uppercase">{c.type || 'Incident'}</span>
+                          <span className="text-[10px] text-on-surface-variant">{new Date(c.createdAt || c.created_at || Date.now()).toLocaleTimeString()}</span>
+                        </div>
+                        <p className="text-xs font-semibold text-on-surface line-clamp-2">{c.description}</p>
+                        {c.status !== 'resolved' && (
+                          <button
+                            onClick={() => handleResolveAlert(cId)}
+                            className="text-[11px] text-primary font-bold hover:underline block pt-1"
+                          >
+                            Mark Resolved ✓
+                          </button>
+                        )}
                       </div>
-                      <p className="text-xs font-semibold text-on-surface line-clamp-2">{c.description}</p>
-                      {c.status !== 'resolved' && (
-                        <button
-                          onClick={() => handleResolveAlert(c.id)}
-                          className="text-[11px] text-primary font-bold hover:underline block pt-1"
-                        >
-                          Mark Resolved ✓
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                   {complaints.length === 0 && (
                     <p className="text-xs text-on-surface-variant text-center py-8">No open system alerts.</p>
                   )}

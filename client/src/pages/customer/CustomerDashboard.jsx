@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import CustomerNavbar from '../../components/CustomerNavbar';
 import PassStatusChip from '../../components/PassStatusChip';
 import { useAuth } from '../../context/AuthContext';
+import api from '../../utils/api';
 import { supabase } from '../../utils/supabaseClient';
 
 const CustomerDashboard = () => {
@@ -14,23 +15,50 @@ const CustomerDashboard = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchData = async () => {
+    fetchData();
+  }, [user]);
+
+  const fetchData = async () => {
+    setLoading(true);
+    let loadedRoutes = [];
+    let loadedPasses = [];
+
+    // 1. Try Express + MongoDB API first
+    try {
+      const [rRes, pRes] = await Promise.allSettled([
+        api.get('/routes'),
+        api.get('/passes/mine')
+      ]);
+
+      if (rRes.status === 'fulfilled' && Array.isArray(rRes.value.data)) {
+        loadedRoutes = rRes.value.data.slice(0, 4);
+      }
+      if (pRes.status === 'fulfilled' && Array.isArray(pRes.value.data)) {
+        loadedPasses = pRes.value.data;
+      }
+    } catch (apiErr) {
+      console.warn('API error in CustomerDashboard, attempting Supabase fallback:', apiErr.message);
+    }
+
+    // 2. Fallback to Supabase if empty
+    if (loadedRoutes.length === 0 || loadedPasses.length === 0) {
       try {
         const [routesRes, passesRes] = await Promise.all([
           supabase.from('routes').select('*').limit(4),
-          supabase.from('passes').select('*, route:routes(*)').eq('user_id', user.id).order('created_at', { ascending: false })
+          supabase.from('passes').select('*, route:routes(*)').eq('user_id', user?.id).order('created_at', { ascending: false })
         ]);
-        setFrequentRoutes(routesRes.data || []);
-        const found = (passesRes.data || []).find(p => p.status === 'active');
-        setActivePass(found || (passesRes.data || [])[0] || null);
+        if (loadedRoutes.length === 0 && routesRes.data) loadedRoutes = routesRes.data;
+        if (loadedPasses.length === 0 && passesRes.data) loadedPasses = passesRes.data;
       } catch (err) {
-        console.error('Error fetching dashboard data:', err);
-      } finally {
-        setLoading(false);
+        console.warn('Supabase fallback error in CustomerDashboard:', err.message);
       }
-    };
-    fetchData();
-  }, [user.id]);
+    }
+
+    setFrequentRoutes(loadedRoutes);
+    const found = loadedPasses.find(p => p.status === 'active') || loadedPasses[0] || null;
+    setActivePass(found);
+    setLoading(false);
+  };
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -39,18 +67,25 @@ const CustomerDashboard = () => {
     }
   };
 
+  const passId = activePass?.passId || activePass?.pass_id;
+  const routeName = activePass?.route?.name || (activePass?.route?.routeNumber ? `Route ${activePass.route.routeNumber}` : 'All City Routes');
+  const validUntil = activePass?.validUntil || activePass?.valid_until;
+  const boarding = activePass?.boardingPoint || activePass?.boarding_point || 'Nagpur Central';
+  const destination = activePass?.destinationStop || activePass?.destination_stop || 'Campus';
+  const remainingTaps = activePass?.totalTaps != null ? Math.max(0, activePass.totalTaps - (activePass.usedTaps || 0)) : null;
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <CustomerNavbar />
 
-      <main className="flex-1 max-w-[1440px] w-full mx-auto p-6 md:p-10 space-y-8">
+      <main className="flex-1 max-w-[1440px] w-full mx-auto p-4 sm:p-6 md:p-10 space-y-6 sm:space-y-8">
         {/* Header Hero Banner */}
-        <section className="bg-gradient-to-r from-primary to-primary-container text-on-primary rounded-2xl p-8 shadow-lg relative overflow-hidden">
+        <section className="bg-gradient-to-r from-primary to-primary-container text-on-primary rounded-2xl p-6 sm:p-8 shadow-lg relative overflow-hidden">
           <div className="relative z-10 max-w-2xl space-y-4">
-            <h1 className="text-3xl md:text-4xl font-black">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-black">
               Good {new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}, {user?.name || 'Commuter'}!
             </h1>
-            <p className="text-body-md text-on-primary/80">
+            <p className="text-xs sm:text-sm text-on-primary/80">
               Where are you heading today? Find routes, track buses in real-time, and manage digital tickets.
             </p>
 
@@ -63,11 +98,11 @@ const CustomerDashboard = () => {
                   placeholder="Enter destination or route number..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="w-full text-on-surface text-sm border-none focus:outline-none placeholder:text-outline"
+                  className="w-full text-on-surface text-xs sm:text-sm border-none focus:outline-none placeholder:text-outline"
                 />
               </div>
-              <button type="submit" className="btn-primary py-2 px-6">
-                Search Routes
+              <button type="submit" className="btn-primary py-2 px-4 sm:px-6 text-xs sm:text-sm">
+                Search
               </button>
             </form>
           </div>
@@ -86,7 +121,7 @@ const CustomerDashboard = () => {
                   <span className="material-symbols-outlined text-2xl">confirmation_number</span>
                 </div>
                 <div>
-                  <h3 className="font-bold text-lg">Buy New Bus Pass</h3>
+                  <h3 className="font-bold text-base sm:text-lg">Buy New Bus Pass</h3>
                   <p className="text-xs text-on-surface-variant">Daily, Weekly, Monthly or Annual options</p>
                 </div>
               </div>
@@ -98,7 +133,7 @@ const CustomerDashboard = () => {
                   <span className="material-symbols-outlined text-2xl">location_on</span>
                 </div>
                 <div>
-                  <h3 className="font-bold text-lg">Track Live Bus</h3>
+                  <h3 className="font-bold text-base sm:text-lg">Track Live Bus</h3>
                   <p className="text-xs text-on-surface-variant">View bus locations & seat occupancy</p>
                 </div>
               </div>
@@ -110,7 +145,7 @@ const CustomerDashboard = () => {
                   <span className="material-symbols-outlined text-2xl">history</span>
                 </div>
                 <div>
-                  <h3 className="font-bold text-lg">My Passes & History</h3>
+                  <h3 className="font-bold text-base sm:text-lg">My Passes & History</h3>
                   <p className="text-xs text-on-surface-variant">View saved tickets and transaction history</p>
                 </div>
               </div>
@@ -121,7 +156,7 @@ const CustomerDashboard = () => {
           <div className="lg:col-span-2 card p-6 flex flex-col justify-between relative overflow-hidden bg-surface-container-lowest">
             <div className="flex justify-between items-start mb-4">
               <div>
-                <h2 className="text-xl font-bold text-on-surface">Active Pass Status</h2>
+                <h2 className="text-lg sm:text-xl font-bold text-on-surface">Active Pass Status</h2>
                 <p className="text-xs text-on-surface-variant">Your current pass for commuter travel</p>
               </div>
               {activePass && <PassStatusChip status={activePass.status} />}
@@ -136,14 +171,20 @@ const CustomerDashboard = () => {
               <div className="bg-gradient-to-r from-primary to-surface-tint rounded-xl p-6 text-on-primary flex flex-col sm:flex-row justify-between items-center gap-4 shadow-md">
                 <div className="space-y-2">
                   <span className="text-xs font-bold uppercase tracking-widest bg-white/20 px-3 py-1 rounded-full">
-                    {activePass.duration} Pass · {activePass.pass_id}
+                    {activePass.duration} Pass · {passId}
                   </span>
-                  <h3 className="text-2xl font-black">{activePass.route?.name || 'All City Routes'}</h3>
+                  <h3 className="text-xl sm:text-2xl font-black">{routeName}</h3>
                   <p className="text-xs opacity-80">
-                    Stops: {activePass.boarding_point} → {activePass.destination_stop}
+                    Stops: {boarding} → {destination}
                   </p>
-                  <p className="text-xs font-semibold mt-2">
-                    Valid until: {new Date(activePass.valid_until).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  {remainingTaps !== null && (
+                    <p className="text-xs font-bold text-secondary-container">
+                      Tap Balance: {remainingTaps} / {activePass.totalTaps} taps
+                      {activePass.rolloverTapsIn > 0 && ` (+${activePass.rolloverTapsIn} rolled over)`}
+                    </p>
+                  )}
+                  <p className="text-xs font-semibold mt-1">
+                    Valid until: {validUntil ? new Date(validUntil).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A'}
                   </p>
                 </div>
 
@@ -168,7 +209,7 @@ const CustomerDashboard = () => {
         <section className="space-y-4">
           <div className="flex justify-between items-center">
             <div>
-              <h2 className="text-xl font-bold">Popular Routes</h2>
+              <h2 className="text-lg sm:text-xl font-bold">Popular Routes</h2>
               <p className="text-xs text-on-surface-variant">Frequently travelled urban bus corridors</p>
             </div>
             <button onClick={() => navigate('/customer/routes')} className="text-xs font-bold text-primary hover:underline">
@@ -177,31 +218,37 @@ const CustomerDashboard = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {frequentRoutes.map(route => (
-              <div key={route.id} className="card p-5 hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="px-3 py-1 bg-primary text-on-primary font-black rounded-lg text-sm">
-                      Route {route.route_number}
-                    </span>
-                    <span className="text-xs text-secondary font-bold flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-secondary"></span> Active
-                    </span>
-                  </div>
-                  <h3 className="font-bold text-on-surface text-base">{route.name}</h3>
-                  <p className="text-xs text-on-surface-variant">
-                    {route.stops?.length || 5} Stops · {route.frequency || 'Every 15 mins'}
-                  </p>
-                </div>
+            {frequentRoutes.map(route => {
+              const rId = route._id || route.id;
+              const rNum = route.routeNumber || route.route_number || 'Route';
+              const rFare = route.baseFare || route.base_fare || 20;
 
-                <div className="pt-3 border-t border-outline-variant/30 flex items-center justify-between">
-                  <span className="text-sm font-black text-primary">₹{route.base_fare || 20}</span>
-                  <button onClick={() => navigate(`/track?route=${route.id}`)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1">
-                    Track Live <span className="material-symbols-outlined text-sm">arrow_forward</span>
-                  </button>
+              return (
+                <div key={rId} className="card p-5 hover:shadow-overlay transition-all flex flex-col justify-between space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="px-3 py-1 bg-primary text-on-primary font-black rounded-lg text-sm">
+                        Route {rNum}
+                      </span>
+                      <span className="text-xs text-secondary font-bold flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-secondary"></span> Active
+                      </span>
+                    </div>
+                    <h3 className="font-bold text-on-surface text-base">{route.name}</h3>
+                    <p className="text-xs text-on-surface-variant">
+                      {route.stops?.length || 5} Stops · {route.frequency || 'Every 15 mins'}
+                    </p>
+                  </div>
+
+                  <div className="pt-3 border-t border-outline-variant/30 flex items-center justify-between">
+                    <span className="text-sm font-black text-primary">₹{rFare}</span>
+                    <button onClick={() => navigate(`/track?route=${rId}`)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1">
+                      Track Live <span className="material-symbols-outlined text-sm">arrow_forward</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       </main>
