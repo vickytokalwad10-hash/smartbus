@@ -2,36 +2,57 @@ import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import PassStatusChip from './PassStatusChip';
 
 const QRCodeCard = ({ pass }) => {
   const canvasRef = useRef(null);
   const cardRef = useRef(null);
   const [qrDataUrl, setQrDataUrl] = useState('');
 
+  const passId = pass?.passId || pass?.pass_id || pass?._id || pass?.id || 'JDC-PASS';
+  const rawQr = pass?.qrData || pass?.qr_data || (pass ? JSON.stringify({ passId, userId: pass.user?._id || pass.user?.id || 'user' }) : '');
+
   useEffect(() => {
-    const rawQr = pass?.qrData || pass?.qr_data;
     if (!rawQr) return;
     QRCode.toDataURL(rawQr, { width: 160, margin: 1, color: { dark: '#003fb1', light: '#ffffff' } })
       .then(setQrDataUrl)
       .catch(console.error);
-  }, [pass]);
+  }, [rawQr]);
 
   const handleDownload = async () => {
     if (!cardRef.current) return;
-    const canvas = await html2canvas(cardRef.current, { scale: 2, backgroundColor: '#003fb1' });
-    const pdf = new jsPDF({ orientation: 'landscape', unit: 'px', format: [420, 260] });
-    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, 420, 260);
-    pdf.save(`SmartBus-Pass-${pass.passId || pass.pass_id}.pdf`);
+    try {
+      const canvas = await html2canvas(cardRef.current, { scale: 2, backgroundColor: '#003fb1' });
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'px', format: [420, 260] });
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, 420, 260);
+      pdf.save(`SmartBus-Pass-${passId}.pdf`);
+    } catch (e) {
+      console.error('PDF export error:', e);
+    }
   };
 
   if (!pass) return null;
 
-  const passId = pass.passId || pass.pass_id || 'PASS';
-  const validUntil = new Date(pass.validUntil || pass.valid_until).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-  const routeName = pass.route?.routeNumber || pass.route?.route_number || 'Route';
-  const remainingTaps = pass.remainingTaps != null ? pass.remainingTaps : (pass.totalTaps != null ? Math.max(0, pass.totalTaps - (pass.usedTaps || 0)) : 218);
+  const validUntilDate = pass.validUntil || pass.valid_until;
+  const validUntil = validUntilDate
+    ? new Date(validUntilDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    : 'Valid for Tenure';
+
+  const routeNumber = pass.route?.routeNumber || pass.route?.route_number;
+  const routeName = routeNumber ? `Route ${routeNumber}` : (pass.route?.name || 'JD College Route');
+  const routeDetail = pass.route?.name && routeNumber ? pass.route.name : '';
+
+  const remainingTaps = pass.remainingTaps != null
+    ? pass.remainingTaps
+    : (pass.totalTaps != null ? Math.max(0, pass.totalTaps - (pass.usedTaps || 0)) : 60);
+
   const rolloverTaps = pass.rolloverTapsIn || pass.rollover_taps_in || 0;
+  const passType = pass.passType || pass.pass_type || 'teacher';
+  const passTypeDisplay = passType === 'teacher' ? 'Faculty Transit Pass' : passType === 'student' ? 'Student Transit Pass' : 'General Transit Pass';
+  const passStatus = (pass.status || 'active').toUpperCase();
+
+  const userName = (typeof pass.user === 'object' && pass.user?.name)
+    ? pass.user.name
+    : (typeof pass.user === 'string' && !pass.user.match(/^[0-9a-fA-F]{24}$/) ? pass.user : 'Prof. Rajesh Kulkarni');
 
   return (
     <div className="space-y-4">
@@ -41,7 +62,7 @@ const QRCodeCard = ({ pass }) => {
         className="relative w-full max-w-sm bg-gradient-to-br from-primary to-primary-container rounded-2xl p-6 text-on-primary overflow-hidden shadow-xl"
       >
         {/* Background bus icon */}
-        <div className="absolute -right-8 -bottom-8 opacity-10">
+        <div className="absolute -right-8 -bottom-8 opacity-10 pointer-events-none">
           <span className="material-symbols-outlined" style={{ fontSize: '160px' }}>directions_bus</span>
         </div>
 
@@ -49,9 +70,9 @@ const QRCodeCard = ({ pass }) => {
         <div className="flex justify-between items-start mb-4 relative z-10">
           <div>
             <p className="text-xs font-bold opacity-70 uppercase tracking-widest">
-              {(pass.passType || pass.pass_type) === 'student' ? 'Student Transit Pass' : 'General Transit Pass'}
+              {passTypeDisplay}
             </p>
-            <p className="text-xl font-bold mt-1">{pass.user?.name || 'Passenger'}</p>
+            <p className="text-xl font-bold mt-1">{userName}</p>
           </div>
           <div className="bg-white/20 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-bold">
             {passId}
@@ -63,7 +84,7 @@ const QRCodeCard = ({ pass }) => {
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-sm">route</span>
-              <span className="text-sm font-semibold">{routeName} — {pass.route?.name || ''}</span>
+              <span className="text-sm font-semibold">{routeName}{routeDetail ? ` — ${routeDetail}` : ''}</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-sm">calendar_month</span>
@@ -77,7 +98,7 @@ const QRCodeCard = ({ pass }) => {
             </div>
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-sm">person</span>
-              <span className="text-xs opacity-80 capitalize">{pass.duration} pass</span>
+              <span className="text-xs opacity-80 capitalize">{pass.duration || 'Monthly'} pass</span>
             </div>
           </div>
 
@@ -94,7 +115,7 @@ const QRCodeCard = ({ pass }) => {
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-secondary-container status-pulse"></span>
             <span className="text-xs font-bold uppercase tracking-wider">
-              {pass.status.toUpperCase()}
+              {passStatus}
             </span>
           </div>
           <span className="text-xs opacity-70">SmartBus AI Transit</span>
@@ -112,7 +133,7 @@ const QRCodeCard = ({ pass }) => {
             if (qrDataUrl) {
               const a = document.createElement('a');
               a.href = qrDataUrl;
-              a.download = `qr-${pass.pass_id}.png`;
+              a.download = `qr-${passId}.png`;
               a.click();
             }
           }}
